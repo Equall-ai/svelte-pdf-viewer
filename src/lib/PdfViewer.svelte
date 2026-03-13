@@ -1,6 +1,7 @@
 <script lang="ts" module>
 	// Export compound components
 	export { default as Renderer } from './PdfRenderer.svelte';
+	export { default as ThumbnailViewer } from './PdfThumbnailViewer.svelte';
 </script>
 
 <script lang="ts">

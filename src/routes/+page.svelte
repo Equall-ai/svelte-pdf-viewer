@@ -3,6 +3,7 @@
 	import {
 		PdfViewer,
 		PdfRenderer,
+		PdfThumbnailViewer,
 		type PdfSource,
 		type TextHighlightData,
 		type BoundingBox,
@@ -22,6 +23,7 @@
 	// Page width control
 	let pageWidthEnabled = $state(true);
 	let pageWidthValue = $state(800);
+	let currentPage = $state(1);
 
 	// Bounding boxes demo
 	let showBoundingBoxes = $state(true);
@@ -332,13 +334,26 @@
 			}}
 			onBoundingBoxDrawn={handleBoundingBoxDrawn}
 			onBoundingBoxClose={handleBoundingBoxClose}
+			bind:currentPage
 		>
 			<ScrollDemo boundingBoxes={showBoundingBoxes ? boundingBoxes : []} />
-			<PdfRenderer
-				backgroundColor="#e8e8e8"
-				scrollbarThumbColor="#c1c1c1"
-				scrollbarTrackColor="#f1f1f1"
-			/>
+			<div class="viewer-layout">
+				<div class="thumbnail-sidebar">
+					<PdfThumbnailViewer
+						columns={1}
+						width={120}
+						gap={8}
+						onPageClick={(page) => {
+							currentPage = page;
+						}}
+					/>
+				</div>
+				<PdfRenderer
+					backgroundColor="#e8e8e8"
+					scrollbarThumbColor="#c1c1c1"
+					scrollbarTrackColor="#f1f1f1"
+				/>
+			</div>
 		</PdfViewer>
 	</div>
 
@@ -490,6 +505,19 @@
 		border: 1px solid #ccc;
 		border-radius: 4px;
 		overflow: hidden;
+	}
+
+	.viewer-layout {
+		display: flex;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.thumbnail-sidebar {
+		width: 150px;
+		flex-shrink: 0;
+		overflow-y: auto;
+		border-right: 1px solid #ccc;
 	}
 
 	.highlight-tooltip {
