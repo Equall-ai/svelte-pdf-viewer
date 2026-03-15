@@ -74,14 +74,20 @@
 	let bbLayers: Map<number, BoundingBoxLayer> = new Map();
 	let renderTasks: Map<number, import('pdfjs-dist/legacy/build/pdf.mjs').RenderTask> = new Map();
 	let observer: IntersectionObserver | null = null;
+	let loadGeneration = 0;
 
 	async function loadDocument(source: PdfSource) {
 		if (!BROWSER) return;
 
-		cleanup();
+		const generation = ++loadGeneration;
+
+		await cleanup();
+
+		// Another load was triggered while we were cleaning up
+		if (generation !== loadGeneration) return;
 
 		const pdfjs = await getPdfJs();
-		if (!pdfjs) return;
+		if (!pdfjs || generation !== loadGeneration) return;
 
 		let documentSource: string | { data: ArrayBuffer } | { data: Uint8Array };
 
@@ -89,6 +95,7 @@
 			documentSource = source;
 		} else if (source instanceof Blob) {
 			const arrayBuffer = await source.arrayBuffer();
+			if (generation !== loadGeneration) return;
 			documentSource = { data: arrayBuffer };
 		} else if (source instanceof ArrayBuffer) {
 			documentSource = { data: source.slice(0) };
@@ -99,7 +106,12 @@
 		}
 
 		const loadingTask = pdfjs.getDocument(documentSource);
-		pdfDocument = await loadingTask.promise;
+		const doc = await loadingTask.promise;
+		if (generation !== loadGeneration) {
+			doc.destroy();
+			return;
+		}
+		pdfDocument = doc;
 		totalPages = pdfDocument.numPages;
 
 		const lo = Math.max(1, startPage ?? 1);
@@ -300,7 +312,7 @@
 		bbLayers.set(pageNum, layer);
 	}
 
-	function cleanup() {
+	async function cleanup() {
 		if (observer) {
 			observer.disconnect();
 			observer = null;
@@ -319,8 +331,9 @@
 		renderedPages = new Set();
 
 		if (pdfDocument) {
-			pdfDocument.destroy();
+			const doc = pdfDocument;
 			pdfDocument = null;
+			await doc.destroy();
 		}
 		allPages = [];
 		displayPages = [];
