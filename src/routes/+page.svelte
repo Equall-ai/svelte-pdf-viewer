@@ -346,6 +346,10 @@
 						onPageClick={(page) => {
 							currentPage = page;
 						}}
+						class="justify-center p-2"
+						buttonClass="thumbnail-button"
+						containerClass="thumbnail-container"
+						labelClass="thumbnail-label"
 					/>
 				</div>
 				<PdfRenderer
@@ -518,6 +522,35 @@
 		flex-shrink: 0;
 		overflow-y: auto;
 		border-right: 1px solid #ccc;
+	}
+
+	:global(.thumbnail-button) {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		background: none;
+		border: 2px solid transparent;
+		border-radius: 4px;
+		padding: 4px;
+		cursor: pointer;
+		transition: border-color 0.15s ease;
+	}
+
+	:global(.thumbnail-button:hover) {
+		border-color: #4a90d9;
+	}
+
+	:global(.thumbnail-container) {
+		overflow: hidden;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+		background: #fff;
+	}
+
+	:global(.thumbnail-label) {
+		margin-top: 4px;
+		font-size: 11px;
+		color: #666;
+		user-select: none;
 	}
 
 	.highlight-tooltip {

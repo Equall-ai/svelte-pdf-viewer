@@ -21,6 +21,14 @@
 		startPage?: number;
 		/** Last page to show (1-indexed, inclusive). Defaults to the last page. */
 		endPage?: number;
+		/** CSS class for the grid container */
+		class?: string;
+		/** CSS class for each thumbnail button */
+		buttonClass?: string;
+		/** CSS class for the canvas container div */
+		containerClass?: string;
+		/** CSS class for the page number label */
+		labelClass?: string;
 	}
 
 	let {
@@ -30,7 +38,11 @@
 		onPageClick,
 		overscan = 2,
 		startPage,
-		endPage
+		endPage,
+		class: gridClass = '',
+		buttonClass = '',
+		containerClass = '',
+		labelClass = ''
 	}: Props = $props();
 
 	const context = getPdfViewerContext();
@@ -367,74 +379,29 @@
 </script>
 
 <div
-	class="pdf-thumbnail-grid"
+	class={gridClass}
 	bind:this={gridEl}
+	style:display="grid"
 	style:grid-template-columns="repeat({columns}, auto)"
 	style:gap="{gap}px"
 >
 	{#each displayPages as entry, i}
 		<button
-			class="pdf-thumbnail-button"
+			class={buttonClass}
 			type="button"
 			onclick={() => onPageClick?.(entry.pageNum)}
 			bind:this={buttonEls[i]}
 		>
 			<div
-				class="pdf-thumbnail-container"
+				class={containerClass}
 				bind:this={containerEls[i]}
+				style:position="relative"
 				style:width="{width}px"
 				style:height="{pageHeights[i] ?? width * 1.4}px"
 			>
-				<canvas bind:this={canvasEls[i]}></canvas>
+				<canvas bind:this={canvasEls[i]} style:display="block"></canvas>
 			</div>
-			<span class="pdf-thumbnail-label">{entry.pageNum}</span>
+			<span class={labelClass}>{entry.pageNum}</span>
 		</button>
 	{/each}
 </div>
-
-<style>
-	.pdf-thumbnail-grid {
-		display: grid;
-		justify-content: center;
-		padding: 8px;
-	}
-
-	.pdf-thumbnail-button {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		background: none;
-		border: 2px solid transparent;
-		border-radius: 4px;
-		padding: 4px;
-		cursor: pointer;
-		transition: border-color 0.15s ease;
-	}
-
-	.pdf-thumbnail-button:hover {
-		border-color: #4a90d9;
-	}
-
-	.pdf-thumbnail-button:focus-visible {
-		outline: 2px solid #4a90d9;
-		outline-offset: 2px;
-	}
-
-	.pdf-thumbnail-container {
-		position: relative;
-		overflow: hidden;
-		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-		background: #fff;
-	}
-
-	.pdf-thumbnail-container canvas {
-		display: block;
-	}
-
-	.pdf-thumbnail-label {
-		margin-top: 4px;
-		font-size: 11px;
-		color: #666;
-		user-select: none;
-	}
-</style>
