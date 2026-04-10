@@ -37,6 +37,8 @@ export interface PDFViewerOptions {
 	onBoundingBoxDrawn?: (box: DrawnBoundingBox) => void;
 	onBoundingBoxClick?: (box: BoundingBox) => void;
 	onBoundingBoxHover?: (box: BoundingBox | null) => void;
+	/** Factory that creates a loading indicator element for each page. If omitted, no loading indicator is shown. */
+	createLoadingIndicator?: () => HTMLElement;
 }
 
 const DEFAULT_SCALE = 1.0;
@@ -77,6 +79,9 @@ export class PDFViewerCore {
 	// Page width override
 	private pageWidth?: number;
 
+	// Loading indicator factory
+	private createLoadingIndicator?: () => HTMLElement;
+
 	constructor(options: PDFViewerOptions) {
 		this.container = options.container;
 		this.eventBus = options.eventBus ?? new EventBus();
@@ -89,6 +94,7 @@ export class PDFViewerCore {
 		this.onBoundingBoxDrawn = options.onBoundingBoxDrawn;
 		this.onBoundingBoxClick = options.onBoundingBoxClick;
 		this.onBoundingBoxHover = options.onBoundingBoxHover;
+		this.createLoadingIndicator = options.createLoadingIndicator;
 
 		// Create viewer div inside container
 		this.viewer = document.createElement('div');
@@ -220,7 +226,8 @@ export class PDFViewerCore {
 				drawingStyle: this.drawingStyle,
 				onBoundingBoxDrawn: this.onBoundingBoxDrawn,
 				onBoundingBoxClick: this.onBoundingBoxClick,
-				onBoundingBoxHover: this.onBoundingBoxHover
+				onBoundingBoxHover: this.onBoundingBoxHover,
+				createLoadingIndicator: this.createLoadingIndicator
 			});
 
 			pageView.setPdfPage(page);

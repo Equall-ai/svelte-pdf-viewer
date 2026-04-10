@@ -49,6 +49,8 @@ export interface PDFPageViewOptions {
 	onBoundingBoxDrawn?: (box: DrawnBoundingBox) => void;
 	onBoundingBoxClick?: (box: BoundingBox) => void;
 	onBoundingBoxHover?: (box: BoundingBox | null) => void;
+	/** Factory that creates a loading indicator element for each page. If omitted, no loading indicator is shown. */
+	createLoadingIndicator?: () => HTMLElement;
 }
 
 export const RenderingStates = {
@@ -75,7 +77,7 @@ export class PDFPageView {
 	private canvas: HTMLCanvasElement | null = null;
 	private canvasWrapper: HTMLDivElement | null = null;
 	private textLayerDiv: HTMLDivElement | null = null;
-	private loadingDiv: HTMLDivElement | null = null;
+	private loadingDiv: HTMLElement | null = null;
 
 	// Annotation layer
 	private linkService: SimpleLinkService | null = null;
@@ -130,11 +132,11 @@ export class PDFPageView {
 		this.setDimensions();
 		this.container.appendChild(this.div);
 
-		// Add loading indicator
-		this.loadingDiv = document.createElement('div');
-		this.loadingDiv.className = 'loadingIcon';
-		this.loadingDiv.textContent = 'Loading...';
-		this.div.appendChild(this.loadingDiv);
+		// Add loading indicator if a factory was provided
+		if (options.createLoadingIndicator) {
+			this.loadingDiv = options.createLoadingIndicator();
+			this.div.appendChild(this.loadingDiv);
+		}
 	}
 
 	private async setDimensions(): Promise<void> {

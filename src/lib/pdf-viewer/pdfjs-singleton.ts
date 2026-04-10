@@ -66,6 +66,15 @@ export async function getPdfJs(): Promise<typeof import('pdfjs-dist/legacy/build
 }
 
 /**
+ * Get the singleton PDFWorker instance.
+ * Pass this to `getDocument({ worker })` so that `PDFDocumentProxy.destroy()`
+ * does not destroy the shared worker.
+ */
+export function getPdfWorker(): import('pdfjs-dist/legacy/build/pdf.mjs').PDFWorker | null {
+	return pdfWorker;
+}
+
+/**
  * Destroy the PDF.js worker and cleanup resources.
  * Call this when you're completely done with PDF viewing in your app.
  * Note: After calling this, the next getPdfJs() call will create a new worker.

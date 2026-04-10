@@ -2,7 +2,7 @@
 	import { BROWSER } from 'esm-env';
 	import { onDestroy, tick } from 'svelte';
 	import { getPdfViewerContext, type PdfSource } from './pdf-viewer/context.js';
-	import { getPdfJs } from './pdf-viewer/pdfjs-singleton.js';
+	import { getPdfJs, getPdfWorker } from './pdf-viewer/pdfjs-singleton.js';
 	import { BoundingBoxLayer } from './pdf-viewer/BoundingBoxLayer.js';
 	import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
@@ -105,7 +105,12 @@
 			throw new Error('Invalid PDF source type');
 		}
 
-		const loadingTask = pdfjs.getDocument(documentSource);
+		const worker = getPdfWorker();
+		// Pass the singleton worker explicitly so doc.destroy() won't tear it down
+		const docParams: Record<string, unknown> =
+			typeof documentSource === 'string' ? { url: documentSource } : { ...documentSource };
+		if (worker) docParams.worker = worker;
+		const loadingTask = pdfjs.getDocument(docParams);
 		const doc = await loadingTask.promise;
 		if (generation !== loadGeneration) {
 			doc.destroy();

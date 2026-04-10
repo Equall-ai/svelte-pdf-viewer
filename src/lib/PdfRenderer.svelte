@@ -6,7 +6,7 @@
 		type PdfViewerActions,
 		type PdfSource
 	} from './pdf-viewer/context.js';
-	import { getPdfJs } from './pdf-viewer/pdfjs-singleton.js';
+	import { getPdfJs, getPdfWorker } from './pdf-viewer/pdfjs-singleton.js';
 	import { PdfPresentationMode } from './pdf-viewer/PdfPresentationMode.js';
 	import { rendererStyles } from './pdf-viewer/renderer-styles.js';
 	import BoundingBoxOverlay from './pdf-viewer/BoundingBoxOverlay.svelte';
@@ -27,6 +27,8 @@
 		scrollbarThumbHoverColor?: string;
 		/** Scrollbar width */
 		scrollbarWidth?: string;
+		/** Factory that creates a loading indicator element for each page. Called once per page. If omitted, no per-page loading indicator is shown. */
+		createLoadingIndicator?: () => HTMLElement;
 	}
 
 	let {
@@ -36,7 +38,8 @@
 		scrollbarTrackColor = '#f1f1f1',
 		scrollbarThumbColor = '#c1c1c1',
 		scrollbarThumbHoverColor = '#a1a1a1',
-		scrollbarWidth = '10px'
+		scrollbarWidth = '10px',
+		createLoadingIndicator
 	}: Props = $props();
 
 	const context = getPdfViewerContext();
@@ -111,7 +114,8 @@
 				drawingStyle: context.drawingStyle,
 				onBoundingBoxDrawn: context._onBoundingBoxDrawn,
 				onBoundingBoxClick: context._onBoundingBoxClick,
-				onBoundingBoxHover: context._onBoundingBoxHover
+				onBoundingBoxHover: context._onBoundingBoxHover,
+				createLoadingIndicator
 			});
 
 			findController = new FindController(newViewer, eventBus);
@@ -172,7 +176,12 @@
 				throw new Error('Invalid PDF source type');
 			}
 
-			const loadingTask = pdfjs.getDocument(documentSource);
+			// Pass the singleton worker explicitly so doc.destroy() won't tear it down
+			const worker = getPdfWorker();
+			const docParams: Record<string, unknown> =
+				typeof documentSource === 'string' ? { url: documentSource } : { ...documentSource };
+			if (worker) docParams.worker = worker;
+			const loadingTask = pdfjs.getDocument(docParams);
 			const loadedPdfDocument = await loadingTask.promise;
 
 			await newViewer.setDocument(loadedPdfDocument);
