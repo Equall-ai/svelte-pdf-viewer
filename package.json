@@ -1,6 +1,6 @@
 {
 	"name": "@equall-ai/svelte-pdf-viewer",
-	"version": "4.0.4",
+	"version": "4.0.5",
 	"description": "A modern, modular PDF viewer component for Svelte 5. Built on PDF.js with TypeScript support",
 	"author": "Equall",
 	"license": "Apache-2.0",
