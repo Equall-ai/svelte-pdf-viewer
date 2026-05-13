@@ -61,6 +61,7 @@ export class PDFViewerCore {
 	private scrollAbortController: AbortController | null = null;
 	private renderingQueue: Set<number> = new Set();
 	private isRendering = false;
+	private jumpTargetIdx: number | null = null;
 
 	// Link service for annotation navigation
 	private linkService: SimpleLinkService;
@@ -225,23 +226,38 @@ export class PDFViewerCore {
 		if (!this.pdfDocument || this.pages.length === 0) return;
 
 		const visible = this.getVisiblePages();
-
-		// Queue visible pages + prerender buffer
 		const startPage = Math.max(0, visible.first - PAGES_TO_PRERENDER);
 		const endPage = Math.min(this.pages.length - 1, visible.last + PAGES_TO_PRERENDER);
 
-		for (let i = startPage; i <= endPage; i++) {
-			const page = this.pages[i];
-			if (page.renderingState === RenderingStates.INITIAL) {
-				this.renderingQueue.add(i);
-			}
+		// If jump target is already rendered, clear it
+		if (this.jumpTargetIdx !== null) {
+			const jp = this.pages[this.jumpTargetIdx];
+			if (!jp || jp.renderingState !== RenderingStates.INITIAL) this.jumpTargetIdx = null;
 		}
 
+		// Rebuild queue: jump target first, then visible pages, then prerender buffer
+		this.renderingQueue.clear();
+		if (this.jumpTargetIdx !== null) this.renderingQueue.add(this.jumpTargetIdx);
+		for (let i = visible.first; i <= visible.last; i++) {
+			if (i !== this.jumpTargetIdx && this.pages[i].renderingState === RenderingStates.INITIAL)
+				this.renderingQueue.add(i);
+		}
+		for (let i = startPage; i < visible.first; i++) {
+			if (i !== this.jumpTargetIdx && this.pages[i].renderingState === RenderingStates.INITIAL)
+				this.renderingQueue.add(i);
+		}
+		for (let i = visible.last + 1; i <= endPage; i++) {
+			if (i !== this.jumpTargetIdx && this.pages[i].renderingState === RenderingStates.INITIAL)
+				this.renderingQueue.add(i);
+		}
+
+		// Capture displayPage before processRenderingQueue clears jumpTargetIdx
+		const displayPage = this.jumpTargetIdx !== null ? this.jumpTargetIdx + 1 : visible.first + 1;
 		this.processRenderingQueue();
 
 		this.eventBus.dispatch('updateviewarea', {
 			location: {
-				pageNumber: visible.first + 1,
+				pageNumber: displayPage,
 				scale: this.currentScale,
 				rotation: this.currentRotation
 			}
@@ -252,18 +268,21 @@ export class PDFViewerCore {
 		if (this.isRendering || this.renderingQueue.size === 0) return;
 
 		this.isRendering = true;
+		try {
+			while (this.renderingQueue.size > 0) {
+				const pageIndex = this.renderingQueue.values().next().value as number;
+				this.renderingQueue.delete(pageIndex);
 
-		while (this.renderingQueue.size > 0) {
-			const pageIndex = this.renderingQueue.values().next().value as number;
-			this.renderingQueue.delete(pageIndex);
-
-			const page = this.pages[pageIndex];
-			if (page && page.renderingState === RenderingStates.INITIAL) {
-				await page.draw();
+				const page = this.pages[pageIndex];
+				if (page && page.renderingState === RenderingStates.INITIAL) {
+					try {
+						await page.draw();
+					} catch (_) {}
+				}
 			}
+		} finally {
+			this.isRendering = false;
 		}
-
-		this.isRendering = false;
 	}
 
 	get scale(): number {
@@ -323,9 +342,9 @@ export class PDFViewerCore {
 	scrollToPage(pageNumber: number): void {
 		if (pageNumber < 1 || pageNumber > this.pages.length) return;
 
-		const pageView = this.pages[pageNumber - 1];
-		pageView.div.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
+		this.jumpTargetIdx = pageNumber - 1;
+		this.pages[this.jumpTargetIdx].div.scrollIntoView({ behavior: 'instant', block: 'start' });
+		this.updateVisiblePages();
 		this.eventBus.dispatch('pagechanged', { pageNumber });
 	}
 
