@@ -62,6 +62,8 @@ export class PDFViewerCore {
 	private renderingQueue: Set<number> = new Set();
 	private isRendering = false;
 	private jumpTargetIdx: number | null = null;
+	/** Cumulative top offset for each page, in scroll-container px. Rebuilt after setDocument / scale change. */
+	private pageOffsets: number[] = [];
 
 	// Link service for annotation navigation
 	private linkService: SimpleLinkService;
@@ -130,32 +132,6 @@ export class PDFViewerCore {
 		);
 	}
 
-	private getVisiblePages(): { first: number; last: number } {
-		const containerTop = this.container.scrollTop;
-		const containerBottom = containerTop + this.container.clientHeight;
-
-		let firstVisible = -1;
-		let lastVisible = -1;
-
-		let currentTop = 0;
-		for (let i = 0; i < this.pages.length; i++) {
-			const page = this.pages[i];
-			const pageBottom = currentTop + page.height + 10; // 10px gap
-
-			if (pageBottom >= containerTop && currentTop <= containerBottom) {
-				if (firstVisible === -1) firstVisible = i;
-				lastVisible = i;
-			}
-
-			currentTop = pageBottom;
-		}
-
-		return {
-			first: firstVisible === -1 ? 0 : firstVisible,
-			last: lastVisible === -1 ? 0 : lastVisible
-		};
-	}
-
 	async setDocument(pdfDocument: PDFDocumentProxy): Promise<void> {
 		// Cleanup previous document
 		this.cleanup();
@@ -218,9 +194,40 @@ export class PDFViewerCore {
 
 		this.eventBus.dispatch('pagesloaded', { pagesCount: numPages });
 
-		// Initial render of visible pages
+		this.rebuildPageOffsets();
 		this.updateVisiblePages();
 	}
+
+	private rebuildPageOffsets(): void {
+		this.pageOffsets = this.pages.map((p) => p.div.offsetTop);
+	}
+
+	private getVisiblePages(): { first: number; last: number } {
+		const offsets = this.pageOffsets;
+		const n = this.pages.length;
+
+		if (offsets.length !== n) return { first: 0, last: 0 };
+
+		const containerTop = this.container.scrollTop;
+		const containerBottom = containerTop + this.container.clientHeight;
+
+		let lo = 0;
+		let hi = n - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (offsets[mid] < containerBottom) lo = mid;
+			else hi = mid - 1;
+		}
+		const last = lo;
+
+		let first = last;
+		while (first > 0 && offsets[first - 1] + this.pages[first - 1].height > containerTop) {
+			first--;
+		}
+
+		return { first, last };
+	}
+
 
 	private updateVisiblePages(): void {
 		if (!this.pdfDocument || this.pages.length === 0) return;
@@ -301,6 +308,7 @@ export class PDFViewerCore {
 		}
 
 		this.eventBus.dispatch('scalechanged', { scale: newScale });
+		this.rebuildPageOffsets();
 		this.updateVisiblePages();
 	}
 
