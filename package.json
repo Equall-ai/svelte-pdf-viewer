@@ -1,8 +1,8 @@
 {
 	"name": "@equall-ai/svelte-pdf-viewer",
-	"version": "4.0.8",
+	"version": "0.4.0",
 	"description": "A modern, modular PDF viewer component for Svelte 5. Built on PDF.js with TypeScript support",
-	"author": "Equall",
+	"author": "Equall AI",
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -12,9 +12,9 @@
 		"registry": "https://npm.pkg.github.com"
 	},
 	"bugs": {
-		"url": "https://github.com/nullpointerexceptionkek/svelte-pdf-view/issues"
+		"url": "https://github.com/Equall-ai/svelte-pdf-viewer/issues"
 	},
-	"homepage": "https://github.com/nullpointerexceptionkek/svelte-pdf-view#readme",
+	"homepage": "https://github.com/Equall-ai/svelte-pdf-viewer#readme",
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build && npm run prepack",
