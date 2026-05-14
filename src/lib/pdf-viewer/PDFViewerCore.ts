@@ -61,6 +61,10 @@ export class PDFViewerCore {
 	private scrollAbortController: AbortController | null = null;
 	private renderingQueue: Set<number> = new Set();
 	private isRendering = false;
+	private renderVersion = 0;
+	private jumpTargetIdx: number | null = null;
+	/** Cumulative top offset for each page, in scroll-container px. Rebuilt after setDocument / scale change. */
+	private pageOffsets: number[] = [];
 
 	// Link service for annotation navigation
 	private linkService: SimpleLinkService;
@@ -129,32 +133,6 @@ export class PDFViewerCore {
 		);
 	}
 
-	private getVisiblePages(): { first: number; last: number } {
-		const containerTop = this.container.scrollTop;
-		const containerBottom = containerTop + this.container.clientHeight;
-
-		let firstVisible = -1;
-		let lastVisible = -1;
-
-		let currentTop = 0;
-		for (let i = 0; i < this.pages.length; i++) {
-			const page = this.pages[i];
-			const pageBottom = currentTop + page.height + 10; // 10px gap
-
-			if (pageBottom >= containerTop && currentTop <= containerBottom) {
-				if (firstVisible === -1) firstVisible = i;
-				lastVisible = i;
-			}
-
-			currentTop = pageBottom;
-		}
-
-		return {
-			first: firstVisible === -1 ? 0 : firstVisible,
-			last: lastVisible === -1 ? 0 : lastVisible
-		};
-	}
-
 	async setDocument(pdfDocument: PDFDocumentProxy): Promise<void> {
 		// Cleanup previous document
 		this.cleanup();
@@ -217,31 +195,78 @@ export class PDFViewerCore {
 
 		this.eventBus.dispatch('pagesloaded', { pagesCount: numPages });
 
-		// Initial render of visible pages
+		this.rebuildPageOffsets();
 		this.updateVisiblePages();
 	}
+
+	private rebuildPageOffsets(): void {
+		this.pageOffsets = this.pages.map((p) => p.div.offsetTop);
+	}
+
+	private getVisiblePages(): { first: number; last: number } {
+		const offsets = this.pageOffsets;
+		const n = this.pages.length;
+
+		if (offsets.length !== n) return { first: 0, last: 0 };
+
+		const containerTop = this.container.scrollTop;
+		const containerBottom = containerTop + this.container.clientHeight;
+
+		let lo = 0;
+		let hi = n - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (offsets[mid] < containerBottom) lo = mid;
+			else hi = mid - 1;
+		}
+		const last = lo;
+
+		let first = last;
+		while (first > 0 && offsets[first - 1] + this.pages[first - 1].height > containerTop) {
+			first--;
+		}
+
+		return { first, last };
+	}
+
 
 	private updateVisiblePages(): void {
 		if (!this.pdfDocument || this.pages.length === 0) return;
 
 		const visible = this.getVisiblePages();
-
-		// Queue visible pages + prerender buffer
 		const startPage = Math.max(0, visible.first - PAGES_TO_PRERENDER);
 		const endPage = Math.min(this.pages.length - 1, visible.last + PAGES_TO_PRERENDER);
 
-		for (let i = startPage; i <= endPage; i++) {
-			const page = this.pages[i];
-			if (page.renderingState === RenderingStates.INITIAL) {
-				this.renderingQueue.add(i);
-			}
+		// If jump target is already rendered, clear it
+		if (this.jumpTargetIdx !== null) {
+			const jp = this.pages[this.jumpTargetIdx];
+			if (!jp || jp.renderingState !== RenderingStates.INITIAL) this.jumpTargetIdx = null;
 		}
 
+		// Rebuild queue: jump target first, then visible pages, then prerender buffer
+		this.renderingQueue.clear();
+		if (this.jumpTargetIdx !== null) this.renderingQueue.add(this.jumpTargetIdx);
+		for (let i = visible.first; i <= visible.last; i++) {
+			if (i !== this.jumpTargetIdx && this.pages[i].renderingState === RenderingStates.INITIAL)
+				this.renderingQueue.add(i);
+		}
+		for (let i = startPage; i < visible.first; i++) {
+			if (i !== this.jumpTargetIdx && this.pages[i].renderingState === RenderingStates.INITIAL)
+				this.renderingQueue.add(i);
+		}
+		for (let i = visible.last + 1; i <= endPage; i++) {
+			if (i !== this.jumpTargetIdx && this.pages[i].renderingState === RenderingStates.INITIAL)
+				this.renderingQueue.add(i);
+		}
+
+		// Capture displayPage before processRenderingQueue clears jumpTargetIdx
+		const displayPage = this.jumpTargetIdx !== null ? this.jumpTargetIdx + 1 : visible.first + 1;
+		this.renderVersion++;
 		this.processRenderingQueue();
 
 		this.eventBus.dispatch('updateviewarea', {
 			location: {
-				pageNumber: visible.first + 1,
+				pageNumber: displayPage,
 				scale: this.currentScale,
 				rotation: this.currentRotation
 			}
@@ -252,18 +277,24 @@ export class PDFViewerCore {
 		if (this.isRendering || this.renderingQueue.size === 0) return;
 
 		this.isRendering = true;
+		const myVersion = this.renderVersion;
+		try {
+			while (this.renderingQueue.size > 0) {
+				if (this.renderVersion !== myVersion) break;
+				const pageIndex = this.renderingQueue.values().next().value as number;
+				this.renderingQueue.delete(pageIndex);
 
-		while (this.renderingQueue.size > 0) {
-			const pageIndex = this.renderingQueue.values().next().value as number;
-			this.renderingQueue.delete(pageIndex);
-
-			const page = this.pages[pageIndex];
-			if (page && page.renderingState === RenderingStates.INITIAL) {
-				await page.draw();
+				const page = this.pages[pageIndex];
+				if (page && page.renderingState === RenderingStates.INITIAL) {
+					try {
+						await page.draw();
+					} catch (_) {}
+				}
 			}
+		} finally {
+			this.isRendering = false;
+			if (this.renderingQueue.size > 0) this.processRenderingQueue();
 		}
-
-		this.isRendering = false;
 	}
 
 	get scale(): number {
@@ -282,6 +313,7 @@ export class PDFViewerCore {
 		}
 
 		this.eventBus.dispatch('scalechanged', { scale: newScale });
+		this.rebuildPageOffsets();
 		this.updateVisiblePages();
 	}
 
@@ -323,9 +355,9 @@ export class PDFViewerCore {
 	scrollToPage(pageNumber: number): void {
 		if (pageNumber < 1 || pageNumber > this.pages.length) return;
 
-		const pageView = this.pages[pageNumber - 1];
-		pageView.div.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
+		this.jumpTargetIdx = pageNumber - 1;
+		this.pages[this.jumpTargetIdx].div.scrollIntoView({ behavior: 'instant', block: 'start' });
+		this.updateVisiblePages();
 		this.eventBus.dispatch('pagechanged', { pageNumber });
 	}
 
