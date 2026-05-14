@@ -167,6 +167,41 @@ describe('PDFViewerCore – priority-queue jump-to-page', () => {
 	});
 });
 
+describe('PDFViewerCore – renderVersion interrupt', () => {
+	it('second jump cancels the first render pass and draws the new target next', async () => {
+		// Page draw takes 20 ms. Jump to page 20, then immediately jump to page 40
+		// while page 20 is still rendering. After page 20 finishes, the loop should
+		// detect the version mismatch, break, and restart with page 40 as the new target.
+
+		perPageDrawDelayMs = 20;
+		const viewer = await setup(50);
+
+		await new Promise((r) => setTimeout(r, 40)); // let initial render settle
+		drawLog.length = 0;
+
+		viewer.scrollToPage(20); // first jump — starts drawing page 20 (takes 20 ms)
+
+		// Kick the second jump before page 20 finishes
+		await new Promise((r) => setTimeout(r, 5));
+		viewer.scrollToPage(40); // second jump — should interrupt after page 20 completes
+
+		await vi.waitFor(
+			() => {
+				expect(drawLog.some((e) => e.id === 40)).toBe(true);
+			},
+			{ timeout: 2000, interval: 5 }
+		);
+
+		const page20idx = drawLog.findIndex((e) => e.id === 20);
+		const page40idx = drawLog.findIndex((e) => e.id === 40);
+
+		// Page 40 must appear right after page 20 (at most 1 other page between them)
+		expect(page20idx).toBeGreaterThanOrEqual(0);
+		expect(page40idx).toBeGreaterThan(page20idx);
+		expect(page40idx - page20idx).toBeLessThanOrEqual(2);
+	});
+});
+
 describe('PDFViewerCore – jump-to-page performance benchmark', () => {
 	it('target page renders in O(1) pages, not O(N) pages', async () => {
 		// Simulate real rendering cost: 5 ms per page.

@@ -61,6 +61,7 @@ export class PDFViewerCore {
 	private scrollAbortController: AbortController | null = null;
 	private renderingQueue: Set<number> = new Set();
 	private isRendering = false;
+	private renderVersion = 0;
 	private jumpTargetIdx: number | null = null;
 	/** Cumulative top offset for each page, in scroll-container px. Rebuilt after setDocument / scale change. */
 	private pageOffsets: number[] = [];
@@ -260,6 +261,7 @@ export class PDFViewerCore {
 
 		// Capture displayPage before processRenderingQueue clears jumpTargetIdx
 		const displayPage = this.jumpTargetIdx !== null ? this.jumpTargetIdx + 1 : visible.first + 1;
+		this.renderVersion++;
 		this.processRenderingQueue();
 
 		this.eventBus.dispatch('updateviewarea', {
@@ -275,8 +277,10 @@ export class PDFViewerCore {
 		if (this.isRendering || this.renderingQueue.size === 0) return;
 
 		this.isRendering = true;
+		const myVersion = this.renderVersion;
 		try {
 			while (this.renderingQueue.size > 0) {
+				if (this.renderVersion !== myVersion) break;
 				const pageIndex = this.renderingQueue.values().next().value as number;
 				this.renderingQueue.delete(pageIndex);
 
@@ -289,6 +293,7 @@ export class PDFViewerCore {
 			}
 		} finally {
 			this.isRendering = false;
+			if (this.renderingQueue.size > 0) this.processRenderingQueue();
 		}
 	}
 
