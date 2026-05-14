@@ -167,6 +167,38 @@ describe('PDFViewerCore – priority-queue jump-to-page', () => {
 	});
 });
 
+describe('PDFViewerCore – queue clear on jump', () => {
+	it('re-prioritizes target even when it was already queued from an earlier load', async () => {
+		// Reproduces the no-clear race: when a page is already sitting in the queue
+		// (e.g. from an earlier jump or preload), a second jump to that page must
+		// still draw it first. Without renderingQueue.clear(), Set.add(existing) is a
+		// no-op and the target stays buried behind earlier entries.
+
+		perPageDrawDelayMs = 0;
+		const viewer = await setup(50);
+		const core = viewer as any;
+
+		// Wait for all rendering to settle
+		await vi.waitFor(() => expect(core.isRendering).toBe(false));
+
+		// Simulate stale queue: reset pages 2-9 and page 39 (target) to INITIAL.
+		// Page 39 sits at position 8 in the queue — behind 7 other pages.
+		const staleIndices = [2, 3, 4, 5, 6, 7, 8, 9, 39];
+		for (const idx of staleIndices) core.pages[idx].renderingState = RenderingStates.INITIAL;
+		core.renderingQueue.clear();
+		for (const idx of staleIndices) core.renderingQueue.add(idx); // target is last
+		core.isRendering = false;
+		drawLog.length = 0;
+
+		// Jump to page 40 (index 39) — target is buried at position 8 in the old queue
+		viewer.scrollToPage(40);
+		await new Promise((r) => setTimeout(r, 20));
+
+		// With queue clear: target is drawn first
+		expect(drawLog[0].id).toBe(40);
+	});
+});
+
 describe('PDFViewerCore – renderVersion interrupt', () => {
 	it('second jump cancels the first render pass and draws the new target next', async () => {
 		// Page draw takes 20 ms. Jump to page 20, then immediately jump to page 40
