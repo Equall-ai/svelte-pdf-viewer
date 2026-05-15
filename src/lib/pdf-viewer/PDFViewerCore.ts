@@ -229,7 +229,6 @@ export class PDFViewerCore {
 		return { first, last };
 	}
 
-
 	private updateVisiblePages(): void {
 		if (!this.pdfDocument || this.pages.length === 0) return;
 
