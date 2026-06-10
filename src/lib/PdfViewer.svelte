@@ -13,7 +13,8 @@
 		type PdfViewerActions,
 		type PdfSource,
 		type TextHighlightData,
-		type DrawingStyle
+		type DrawingStyle,
+		type SearchOptions
 	} from './pdf-viewer/context.js';
 	import type { BoundingBox, DrawnBoundingBox } from './pdf-viewer/BoundingBoxLayer.js';
 
@@ -145,14 +146,15 @@
 		rotateClockwise: () => rendererActions?.rotateClockwise(),
 		rotateCounterClockwise: () => rendererActions?.rotateCounterClockwise(),
 		goToPage: (page: number) => rendererActions?.goToPage(page),
-		search: async (query: string) => {
+		search: async (query: string, options?: SearchOptions) => {
 			if (rendererActions) {
-				await rendererActions.search(query);
+				await rendererActions.search(query, options);
 			}
 		},
 		searchNext: () => rendererActions?.searchNext(),
 		searchPrevious: () => rendererActions?.searchPrevious(),
 		clearSearch: () => rendererActions?.clearSearch(),
+		getSearchFoundMeta: (pages: number[]) => rendererActions?.getSearchFoundMeta(pages) ?? [],
 		download: downloadPdf,
 		enterPresentationMode: async () => {
 			if (rendererActions) {

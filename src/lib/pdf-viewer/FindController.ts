@@ -34,6 +34,9 @@ export interface FindOptions {
 	caseSensitive?: boolean;
 	entireWord?: boolean;
 	findPrevious?: boolean;
+	// 1-based page to anchor selection to: select the first match at or after this
+	// page (forward-only), so a search after scrolling doesn't drag back to page 1.
+	fromPage?: number;
 }
 
 interface MatchPosition {
@@ -67,7 +70,20 @@ export class FindController {
 	constructor(viewer: PDFViewerCore, eventBus: EventBus) {
 		this.viewer = viewer;
 		this.eventBus = eventBus;
+		// Virtualized pages render (and re-render on scroll/scale) after a search runs,
+		// rebuilding textDivs as plain text. Re-apply this page's highlights when it does.
+		this.eventBus.on('pagerendered', this.onPageRendered);
 	}
+
+	private onPageRendered = (data: Record<string, unknown>): void => {
+		const pageNumber = data.pageNumber as number | undefined;
+		if (!pageNumber || !this.query) return;
+
+		const pageIndex = pageNumber - 1;
+		if (!this.pageMatches[pageIndex] || this.pageMatches[pageIndex].length === 0) return;
+
+		this.highlightPage(pageIndex);
+	};
 
 	setDocument(pdfDocument: PDFDocumentProxy): void {
 		this.pdfDocument = pdfDocument;
@@ -120,7 +136,8 @@ export class FindController {
 			highlightAll = true,
 			caseSensitive = false,
 			entireWord = false,
-			findPrevious = false
+			findPrevious = false,
+			fromPage
 		} = options;
 
 		// Clear previous state
@@ -197,7 +214,7 @@ export class FindController {
 
 		// Select first or last match based on direction
 		if (this.allMatches.length > 0) {
-			this.selectedMatchIndex = findPrevious ? this.allMatches.length - 1 : 0;
+			this.selectedMatchIndex = this.pickInitialMatch(findPrevious, fromPage);
 			this.highlightAllPages();
 			this.scrollToSelectedMatch();
 
@@ -217,6 +234,17 @@ export class FindController {
 				total: this.matchesCountTotal
 			}
 		});
+	}
+
+	// Choose the match to select after a fresh search. With `fromPage` set, prefer
+	// the first match at or after that page so we never scroll backward; if none
+	// exists at/after, fall back to the default end so the search still lands.
+	private pickInitialMatch(findPrevious: boolean, fromPage?: number): number {
+		const fallback = findPrevious ? this.allMatches.length - 1 : 0;
+		if (fromPage == null) return fallback;
+
+		const forwardIdx = this.allMatches.findIndex((m) => m.pageIndex >= fromPage - 1);
+		return forwardIdx === -1 ? fallback : forwardIdx;
 	}
 
 	findNext(): void {
@@ -536,6 +564,14 @@ export class FindController {
 			current: this.selectedMatchIndex + 1,
 			total: this.matchesCountTotal
 		};
+	}
+
+	// Match count per requested page (1-based page numbers).
+	getPageMatchCounts(pages: number[]): Array<{ page: number; matchCount: number }> {
+		return pages.map((page) => ({
+			page,
+			matchCount: this.pageMatches[page - 1]?.length ?? 0
+		}));
 	}
 
 	reset(): void {

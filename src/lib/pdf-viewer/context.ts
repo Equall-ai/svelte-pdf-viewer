@@ -40,6 +40,24 @@ export interface PageDimensions {
 	height: number;
 }
 
+/** Search options forwarded to the underlying find controller (pdf.js-native). */
+export interface SearchOptions {
+	highlightAll?: boolean;
+	caseSensitive?: boolean;
+	entireWord?: boolean;
+	findPrevious?: boolean;
+	/** 1-based page to anchor selection to: select the first match at or after it. */
+	fromPage?: number;
+}
+
+/** Per-page search match metadata. */
+export interface PageSearchMeta {
+	/** 1-based page number */
+	page: number;
+	/** Number of matches found on this page for the active query */
+	matchCount: number;
+}
+
 /** Drawing style configuration for bounding box drawing mode */
 export interface DrawingStyle {
 	borderColor?: string;
@@ -83,10 +101,12 @@ export interface PdfViewerActions {
 	rotateClockwise: () => void;
 	rotateCounterClockwise: () => void;
 	goToPage: (page: number) => void;
-	search: (query: string) => Promise<void>;
+	search: (query: string, options?: SearchOptions) => Promise<void>;
 	searchNext: () => void;
 	searchPrevious: () => void;
 	clearSearch: () => void;
+	/** Match metadata for the requested pages, for the active query. */
+	getSearchFoundMeta: (pages: number[]) => PageSearchMeta[];
 	download: (filename?: string) => Promise<void>;
 	/** Enter fullscreen presentation mode */
 	enterPresentationMode: () => Promise<boolean>;

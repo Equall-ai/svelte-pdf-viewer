@@ -4,7 +4,8 @@
 	import {
 		getPdfViewerContext,
 		type PdfViewerActions,
-		type PdfSource
+		type PdfSource,
+		type SearchOptions
 	} from './pdf-viewer/context.js';
 	import { getPdfJs, getPdfWorker } from './pdf-viewer/pdfjs-singleton.js';
 	import { PdfPresentationMode } from './pdf-viewer/PdfPresentationMode.js';
@@ -258,19 +259,23 @@
 		rotateClockwise: () => viewer?.rotateClockwise(),
 		rotateCounterClockwise: () => viewer?.rotateCounterClockwise(),
 		goToPage: (page: number) => viewer?.scrollToPage(page),
-		search: async (query: string) => {
+		search: async (query: string, options?: SearchOptions) => {
 			if (!findController) return;
 			viewerState.isSearching = true;
 			viewerState.searchQuery = query;
 			await findController.find({
 				query,
-				highlightAll: true,
-				caseSensitive: false
+				highlightAll: options?.highlightAll ?? true,
+				caseSensitive: options?.caseSensitive ?? false,
+				entireWord: options?.entireWord,
+				findPrevious: options?.findPrevious,
+				fromPage: options?.fromPage
 			});
 			viewerState.isSearching = false;
 		},
 		searchNext: () => findController?.findNext(),
 		searchPrevious: () => findController?.findPrevious(),
+		getSearchFoundMeta: (pages: number[]) => findController?.getPageMatchCounts(pages) ?? [],
 		clearSearch: () => {
 			if (findController) {
 				findController.reset();
