@@ -16,7 +16,9 @@ export {
 	type PdfViewerActions,
 	type PdfViewerContext,
 	type PageDimensions,
-	type DrawingStyle
+	type DrawingStyle,
+	type SearchOptions,
+	type PageSearchMeta
 } from './pdf-viewer/context.js';
 
 // Export bounding box types and utilities
