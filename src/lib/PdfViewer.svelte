@@ -20,7 +20,10 @@
 	interface Props {
 		/** PDF source - URL string, ArrayBuffer, Uint8Array, or Blob */
 		src: PdfSource;
-		/** URL directory containing PDF.js annotation images, including a trailing slash. */
+		/**
+		 * URL directory containing PDF.js annotation images, including a trailing slash.
+		 * Read when a PDF loads; changing this alone does not rebuild existing annotations.
+		 */
 		imageResourcesPath?: string;
 		/** Initial scale (default: 1.0) */
 		scale?: number;

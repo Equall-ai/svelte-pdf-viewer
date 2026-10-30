@@ -142,7 +142,9 @@ The main container component that provides context for toolbar and renderer.
 
 Serve the files from your installed `pdfjs-dist/web/images/` directory and pass
 their public URL to the viewer. Use a root-relative or absolute URL so annotation
-icons resolve correctly on nested routes:
+icons resolve correctly on nested routes. The path is read when a PDF loads;
+changing `imageResourcesPath` alone does not rebuild existing annotations.
+Configure it before loading the PDF:
 
 ```svelte
 <PdfViewer src={pdfSource} imageResourcesPath="/pdfjs/images/">
