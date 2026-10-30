@@ -20,6 +20,11 @@
 	interface Props {
 		/** PDF source - URL string, ArrayBuffer, Uint8Array, or Blob */
 		src: PdfSource;
+		/**
+		 * URL directory containing PDF.js annotation images, including a trailing slash.
+		 * Read when a PDF loads; changing this alone does not rebuild existing annotations.
+		 */
+		imageResourcesPath?: string;
 		/** Initial scale (default: 1.0) */
 		scale?: number;
 		/** Custom filename for PDF download (default: extracted from URL or 'document.pdf') */
@@ -54,6 +59,7 @@
 
 	let {
 		src,
+		imageResourcesPath = '',
 		scale: initialScale = 1.0,
 		downloadFilename,
 		onerror,
@@ -182,6 +188,9 @@
 		actions,
 		get src() {
 			return src;
+		},
+		get imageResourcesPath() {
+			return imageResourcesPath;
 		},
 		get boundingBoxes() {
 			return boundingBoxes;

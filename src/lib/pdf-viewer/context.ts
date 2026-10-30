@@ -110,6 +110,8 @@ export interface PdfViewerContext {
 	actions: PdfViewerActions;
 	/** The PDF source - shared from PdfViewer to PdfRenderer */
 	src: PdfSource;
+	/** URL directory containing PDF.js annotation images. */
+	imageResourcesPath?: string;
 	/** Bounding boxes to render on PDF pages */
 	boundingBoxes: BoundingBox[];
 	/** Drawing style for drawn bounding boxes */
