@@ -127,6 +127,7 @@ The main container component that provides context for toolbar and renderer.
 | Prop                | Type                                | Default  | Description                                                                    |
 | ------------------- | ----------------------------------- | -------- | ------------------------------------------------------------------------------ |
 | `src`               | `PdfSource`                         | required | PDF source (URL, ArrayBuffer, Uint8Array, or Blob)                             |
+| `imageResourcesPath` | `string` | `''` | URL directory for PDF.js annotation icons, including a trailing slash. |
 | `scale`             | `number`                            | `1.0`    | Initial zoom scale                                                             |
 | `pageWidth`         | `number`                            | -        | Desired page width in pixels. Overrides `scale` by computing it automatically. |
 | `currentPage`       | `number`                            | `1`      | Current page (1-indexed). Bindable — updates on scroll, setting it navigates.  |
@@ -136,6 +137,20 @@ The main container component that provides context for toolbar and renderer.
 | `boundingBoxes`     | `BoundingBox[]`                     | `[]`     | Bounding boxes to render on PDF pages                                          |
 | `drawMode`          | `boolean`                           | `false`  | Enable drawing mode for creating bounding boxes                                |
 | `class`             | `string`                            | `''`     | CSS class for the container                                                    |
+
+#### Annotation images
+
+Serve the files from your installed `pdfjs-dist/web/images/` directory and pass
+their public URL to the viewer. Use a root-relative or absolute URL so annotation
+icons resolve correctly on nested routes:
+
+```svelte
+<PdfViewer src={pdfSource} imageResourcesPath="/pdfjs/images/">
+	<PdfRenderer />
+</PdfViewer>
+```
+
+The library does not copy these files into the consuming application's build.
 
 #### Page Navigation with `bind:currentPage`
 

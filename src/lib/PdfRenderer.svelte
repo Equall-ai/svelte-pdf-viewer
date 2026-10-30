@@ -109,6 +109,7 @@
 				initialScale: viewerState.scale,
 				initialRotation: viewerState.rotation,
 				pageWidth: context._pageWidth,
+				imageResourcesPath: context.imageResourcesPath,
 				boundingBoxes: boundingBoxes,
 				drawMode: context.state.drawMode,
 				drawingStyle: context.drawingStyle,

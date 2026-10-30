@@ -26,6 +26,7 @@ import type { DrawingStyle } from './context.js';
 
 export interface PDFViewerOptions {
 	container: HTMLElement;
+	imageResourcesPath?: string;
 	eventBus?: EventBus;
 	initialScale?: number;
 	initialRotation?: number;
@@ -81,6 +82,7 @@ export class PDFViewerCore {
 
 	// Page width override
 	private pageWidth?: number;
+	private imageResourcesPath: string;
 
 	// Loading indicator factory
 	private createLoadingIndicator?: () => HTMLElement;
@@ -91,6 +93,7 @@ export class PDFViewerCore {
 		this.currentScale = options.initialScale ?? DEFAULT_SCALE;
 		this.currentRotation = options.initialRotation ?? 0;
 		this.pageWidth = options.pageWidth;
+		this.imageResourcesPath = options.imageResourcesPath ?? '';
 		this.boundingBoxes = options.boundingBoxes ?? [];
 		this.drawMode = options.drawMode ?? false;
 		this.drawingStyle = options.drawingStyle ?? {};
@@ -171,6 +174,7 @@ export class PDFViewerCore {
 				scale: this.currentScale,
 				rotation: this.currentRotation,
 				linkService: this.linkService,
+				imageResourcesPath: this.imageResourcesPath,
 				boundingBoxes: this.boundingBoxes,
 				drawMode: this.drawMode,
 				drawingStyle: this.drawingStyle,

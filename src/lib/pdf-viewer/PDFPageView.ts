@@ -43,6 +43,7 @@ export interface PDFPageViewOptions {
 	scale?: number;
 	rotation?: number;
 	linkService?: SimpleLinkService;
+	imageResourcesPath?: string;
 	boundingBoxes?: BoundingBox[];
 	drawMode?: boolean;
 	drawingStyle?: DrawingStyle;
@@ -81,6 +82,7 @@ export class PDFPageView {
 
 	// Annotation layer
 	private linkService: SimpleLinkService | null = null;
+	private imageResourcesPath: string;
 	private annotationLayerBuilder: AnnotationLayerBuilder | null = null;
 	private annotationLayerRendered = false;
 
@@ -116,6 +118,7 @@ export class PDFPageView {
 		this.rotation = options.rotation ?? 0;
 		this.viewport = options.defaultViewport;
 		this.linkService = options.linkService ?? null;
+		this.imageResourcesPath = options.imageResourcesPath ?? '';
 		this.boundingBoxes = options.boundingBoxes ?? [];
 		this.drawMode = options.drawMode ?? false;
 		this.drawingStyle = options.drawingStyle ?? {};
@@ -437,6 +440,7 @@ export class PDFPageView {
 
 		try {
 			this.annotationLayerBuilder = new AnnotationLayerBuilder({
+				imageResourcesPath: this.imageResourcesPath,
 				pdfPage: this.pdfPage,
 				linkService: this.linkService,
 				renderForms: true,
