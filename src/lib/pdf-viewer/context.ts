@@ -3,6 +3,7 @@
  */
 import { getContext, setContext } from 'svelte';
 import type { BoundingBox } from './BoundingBoxLayer.js';
+import type { PdfAnchorObserver } from './overlayAnchor.js';
 
 const PDF_VIEWER_CONTEXT_KEY = Symbol('pdf-viewer');
 
@@ -106,6 +107,10 @@ export interface PdfViewerActions {
 }
 
 export interface PdfViewerContext {
+	/** Internal geometry subscription used by PdfAnchoredOverlay. */
+	_observeAnchor: PdfAnchorObserver;
+	/** Internal renderer lifecycle registration. */
+	_registerAnchorObserver: (observer: PdfAnchorObserver) => () => void;
 	state: PdfViewerState;
 	actions: PdfViewerActions;
 	/** The PDF source - shared from PdfViewer to PdfRenderer */
@@ -145,4 +150,9 @@ export function getPdfViewerContext(): PdfViewerContext {
 		throw new Error('PdfToolbar must be used inside a PdfViewer component');
 	}
 	return ctx;
+}
+
+/** Internal optional lookup for overlays given an explicit viewer context. */
+export function getOptionalPdfViewerContext(): PdfViewerContext | undefined {
+	return getContext<PdfViewerContext | undefined>(PDF_VIEWER_CONTEXT_KEY);
 }

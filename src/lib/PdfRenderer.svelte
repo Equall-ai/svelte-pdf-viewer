@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { BROWSER } from 'esm-env';
 	import { onDestroy, onMount } from 'svelte';
+	import { observePdfAnchor } from './pdf-viewer/overlayAnchor.js';
 	import {
 		getPdfViewerContext,
 		type PdfViewerActions,
@@ -299,6 +300,7 @@
 		}
 	};
 
+	let detachAnchorObserver: (() => void) | undefined;
 	onMount(async () => {
 		if (BROWSER && hostEl) {
 			// Create shadow root for style isolation
@@ -329,6 +331,10 @@
 
 			// Register actions
 			_registerRenderer(rendererActions);
+			const elements = { host: hostEl, root: shadowRoot, viewport: scrollContainerEl };
+			detachAnchorObserver = context._registerAnchorObserver((anchor, callback) =>
+				observePdfAnchor(elements, anchor, callback)
+			);
 
 			// Set up text selection listener if callback is provided
 			if (_onTextHighlighted) {
@@ -363,6 +369,7 @@
 	}
 
 	onDestroy(() => {
+		detachAnchorObserver?.();
 		if (viewer) {
 			viewer.destroy();
 			viewer = null;
@@ -381,6 +388,7 @@
 	<div bind:this={hostEl} class="pdf-renderer-host"></div>
 	{#if !viewerState.loading && mounted}
 		<BoundingBoxOverlay
+			{context}
 			boxes={boundingBoxes}
 			scale={viewerState.scale}
 			pageDimensions={viewerState.pageDimensions}

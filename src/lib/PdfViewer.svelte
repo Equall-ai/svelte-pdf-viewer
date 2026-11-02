@@ -6,6 +6,8 @@
 
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { onDestroy } from 'svelte';
+	import { createAnchorRegistry } from './pdf-viewer/overlayAnchor.js';
 	import {
 		setPdfViewerContext,
 		PresentationModeState,
@@ -183,7 +185,11 @@
 	};
 
 	// Set up context
+	const anchors = createAnchorRegistry();
+	onDestroy(() => anchors.destroy());
 	setPdfViewerContext({
+		_observeAnchor: anchors.observe,
+		_registerAnchorObserver: anchors.attach,
 		state: viewerState,
 		actions,
 		get src() {

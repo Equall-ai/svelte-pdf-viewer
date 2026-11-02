@@ -80,6 +80,23 @@ export interface BoundingBox {
 	showClose?: boolean;
 	/** Optional snippet for custom close button (receives close callback and box data) */
 	closeButton?: import('svelte').Snippet<[{ close: () => void; box: BoundingBox }]>;
+	/** Custom content anchored above this box, rendered outside the PDF shadow root. */
+	overlay?: import('svelte').Snippet<[{ box: BoundingBox; visible: boolean }]>;
+	/** Placement defaults to top/end with a six-pixel gap, flipping/clamping into the viewport. */
+	overlayPlacement?: import('./overlayAnchor.js').PdfOverlayPlacementOptions;
+}
+
+const generatedBoxIds = new WeakMap<BoundingBox, string>();
+
+/** Identify rendered native boxes without requiring consumers to assign IDs. */
+export function getBoundingBoxAnchorId(box: BoundingBox): string {
+	if (box.id) return box.id;
+	let id = generatedBoxIds.get(box);
+	if (!id) {
+		id = `pdf-overlay-${crypto.randomUUID()}`;
+		generatedBoxIds.set(box, id);
+	}
+	return id;
 }
 
 /** Options for BoundingBoxLayer construction */
@@ -160,8 +177,8 @@ export class BoundingBoxLayer {
 
 		const boxDiv = document.createElement('div');
 		boxDiv.className = `boundingBox ${box.className || ''}`.trim();
-		if (box.id) {
-			boxDiv.setAttribute('data-box-id', box.id);
+		if (box.id || box.overlay) {
+			boxDiv.setAttribute('data-box-id', getBoundingBoxAnchorId(box));
 		}
 
 		// Transform coordinates to viewport pixels
