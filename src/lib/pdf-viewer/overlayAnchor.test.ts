@@ -1,6 +1,11 @@
 // Verify reusable PDF overlay placement, transformed anchors, and observer lifetimes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAnchorRegistry, observePdfAnchor, placePdfOverlay } from './overlayAnchor.js';
+import {
+	createAnchorRegistry,
+	observePdfAnchor,
+	observePdfDocumentAnchor,
+	placePdfOverlay
+} from './overlayAnchor.js';
 
 const rect = (x: number, y: number, width: number, height: number) =>
 	new DOMRect(x, y, width, height);
@@ -140,4 +145,52 @@ it('queues subscriptions until renderer mount and retires replaced renderers', (
 	detachSecond();
 	registry.attach(first);
 	expect(first).toHaveBeenCalledOnce();
+});
+
+it('retains document coordinates offscreen and separates scrolling from layout revisions', async () => {
+	const { host, root, viewport, page, changed } = setup();
+	const surface = document.createElement('div');
+	viewport.append(surface);
+	surface.append(page);
+	let scrollTop = 0;
+	vi.spyOn(surface, 'getBoundingClientRect').mockImplementation(() =>
+		rect(0, -scrollTop, 600, 2000)
+	);
+	const box = document.createElement('div');
+	box.dataset.boxId = 'persistent';
+	page.append(box);
+	vi.spyOn(box, 'getBoundingClientRect').mockImplementation(() =>
+		rect(20, 1000 - scrollTop, 50, 20)
+	);
+	let revision = 1;
+	const stop = observePdfDocumentAnchor(
+		{ host, root, viewport, surface, layoutRevision: () => revision },
+		{ boxId: 'persistent' },
+		changed
+	);
+	await vi.waitFor(() =>
+		expect(changed.mock.lastCall?.[0]).toMatchObject({
+			rect: rect(20, 1000, 50, 20),
+			visible: false,
+			layoutRevision: 1
+		})
+	);
+	scrollTop = 800;
+	viewport.scrollTop = 800;
+	viewport.dispatchEvent(new Event('scroll'));
+	await vi.waitFor(() =>
+		expect(changed.mock.lastCall?.[0]).toMatchObject({
+			rect: rect(20, 1000, 50, 20),
+			visible: true,
+			layoutRevision: 1
+		})
+	);
+	revision = 2;
+	page.style.width = '800px';
+	await vi.waitFor(() => expect(changed.mock.lastCall?.[0]?.layoutRevision).toBe(2));
+	stop();
+	changed.mockClear();
+	window.dispatchEvent(new Event('resize'));
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	expect(changed).not.toHaveBeenCalled();
 });

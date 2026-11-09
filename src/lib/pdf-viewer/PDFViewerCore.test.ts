@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -273,3 +274,75 @@ describe('PDFViewerCore – jump-to-page performance benchmark', () => {
 		expect(drawLog[0].id).toBe(40);
 	});
 });
+
+// Shared viewports must not move outer application scrollers or remove sibling content.
+describe('PDFViewerCore shared surface', () => {
+	it('mounts and cleans up only its page column', async () => {
+		const { PDFViewerCore } = await import('./PDFViewerCore.js');
+		const container = makeContainer();
+		const pageContainer = document.createElement('div');
+		const margin = document.createElement('aside');
+		container.append(pageContainer, margin);
+		const viewer = new PDFViewerCore({ container, pageContainer });
+		expect(viewer.viewer.parentElement).toBe(pageContainer);
+		viewer.destroy();
+		expect(container.contains(margin)).toBe(true);
+	});
+	it('navigates inside the shared viewport using nested page offsets', async () => {
+		const viewer = await setup(3);
+		const page = viewer.getPageView(1)!;
+		vi.spyOn(page.div, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 930, 612, 792));
+		viewer.container.scrollTop = 100;
+		const scroll = vi.spyOn(viewer.container, 'scrollTo');
+		viewer.scrollToPage(2);
+		expect(scroll).toHaveBeenCalledWith({ top: 1030, behavior: 'instant' });
+		expect(page.div.scrollIntoView).not.toHaveBeenCalled();
+		viewer.destroy();
+	});
+});
+
+it('does not append pages from a retired document load', async () => {
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	const viewer = new PDFViewerCore({ container: makeContainer() });
+	const doc = makeFakeDoc(2);
+	let release!: () => void;
+	const pending = new Promise<void>((resolve) => (release = resolve));
+	const firstGetPage = doc.getPage;
+	doc.getPage = async (i) => {
+		if (i === 2) await pending;
+		return firstGetPage(i);
+	};
+	const oldLoad = viewer.setDocument(doc as unknown as PDFDocumentProxy);
+	await vi.waitFor(() => expect(viewer.pagesCount).toBe(1));
+	await viewer.setDocument(makeFakeDoc(1) as unknown as PDFDocumentProxy);
+	release();
+	await oldLoad;
+	expect(viewer.pagesCount).toBe(1);
+	viewer.destroy();
+});
+
+it.each(['scale', 'rotation'] as const)(
+	'preserves the page-relative reading position during %s changes',
+	async (property) => {
+		const viewer = await setup(3);
+		vi.spyOn(viewer.container, 'clientHeight', 'get').mockReturnValue(300);
+		for (let i = 0; i < 3; i++) {
+			const page = viewer.getPageView(i)!;
+			let height = 800;
+			Object.defineProperty(page, 'height', { get: () => height, configurable: true });
+			vi.spyOn(page.div, 'getBoundingClientRect').mockImplementation(
+				() =>
+					new DOMRect(0, 5 + i * (page.height + 16) - viewer.container.scrollTop, 600, page.height)
+			);
+			vi.spyOn(page, 'update').mockImplementation(() => {
+				height = property === 'scale' ? 1600 : 600;
+			});
+		}
+		viewer.refreshLayout();
+		viewer.container.scrollTop = 1021;
+		viewer[property] = property === 'scale' ? 2 : 90;
+		expect(viewer.container.scrollTop).toBe(property === 'scale' ? 2021 : 771);
+		expect(viewer.currentPageNumber).toBe(2);
+		viewer.destroy();
+	}
+);

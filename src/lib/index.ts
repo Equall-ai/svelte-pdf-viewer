@@ -33,3 +33,10 @@ export type { PdfOverlayAnchor, PdfOverlayPlacementOptions } from './pdf-viewer/
 
 // Export PDF.js singleton utilities
 export { configurePdfWorker, destroyPdfJs } from './pdf-viewer/pdfjs-singleton.js';
+
+// Shared document surface and offscreen anchor geometry.
+export type { PdfDocumentSurface, PdfSurfaceRect } from './pdf-viewer/documentSurface.js';
+export type {
+	PdfDocumentAnchorGeometry,
+	PdfDocumentAnchorObserver
+} from './pdf-viewer/overlayAnchor.js';

@@ -26,6 +26,8 @@ import type { DrawingStyle } from './context.js';
 
 export interface PDFViewerOptions {
 	container: HTMLElement;
+	/** Page mount target inside the scrolling viewport; defaults to container. */
+	pageContainer?: HTMLElement;
 	imageResourcesPath?: string;
 	eventBus?: EventBus;
 	initialScale?: number;
@@ -56,6 +58,7 @@ export class PDFViewerCore {
 	readonly eventBus: EventBus;
 
 	private pdfDocument: PDFDocumentProxy | null = null;
+	private documentGeneration = 0;
 	private pages: PDFPageView[] = [];
 	private currentScale: number;
 	private currentRotation: number;
@@ -105,7 +108,7 @@ export class PDFViewerCore {
 		// Create viewer div inside container
 		this.viewer = document.createElement('div');
 		this.viewer.className = 'pdfViewer';
-		this.container.appendChild(this.viewer);
+		(options.pageContainer ?? this.container).appendChild(this.viewer);
 
 		// Create link service for annotation navigation
 		this.linkService = new SimpleLinkService({
@@ -140,6 +143,7 @@ export class PDFViewerCore {
 		// Cleanup previous document
 		this.cleanup();
 
+		const generation = this.documentGeneration;
 		this.pdfDocument = pdfDocument;
 		const numPages = pdfDocument.numPages;
 
@@ -150,6 +154,7 @@ export class PDFViewerCore {
 		// If pageWidth is set, compute scale from first page's natural width
 		if (this.pageWidth !== undefined) {
 			const firstPage = await pdfDocument.getPage(1);
+			if (generation !== this.documentGeneration) return;
 			const naturalViewport = firstPage.getViewport({ scale: 1.0, rotation: firstPage.rotate });
 			this.currentScale = Math.max(
 				MIN_SCALE,
@@ -161,6 +166,7 @@ export class PDFViewerCore {
 		// Create page views
 		for (let i = 1; i <= numPages; i++) {
 			const page = await pdfDocument.getPage(i);
+			if (generation !== this.documentGeneration) return;
 			const viewport = page.getViewport({
 				scale: this.currentScale,
 				rotation: this.currentRotation
@@ -204,7 +210,35 @@ export class PDFViewerCore {
 	}
 
 	private rebuildPageOffsets(): void {
-		this.pageOffsets = this.pages.map((p) => p.div.offsetTop);
+		this.pageOffsets = this.pages.map((p) => this.pageTop(p));
+	}
+
+	private pageTop(page: PDFPageView): number {
+		return (
+			page.div.getBoundingClientRect().top -
+			this.container.getBoundingClientRect().top -
+			this.container.clientTop +
+			this.container.scrollTop
+		);
+	}
+
+	/** Refresh page visibility after the containing surface changes size. */
+	refreshLayout(): void {
+		this.rebuildPageOffsets();
+		this.updateVisiblePages();
+	}
+
+	private readingPosition(): { index: number; fraction: number } | null {
+		if (!this.pages.length) return null;
+		const index = this.getVisiblePages().first;
+		const page = this.pages[index];
+		return { index, fraction: (this.container.scrollTop - this.pageTop(page)) / page.height };
+	}
+
+	private restoreReadingPosition(position: { index: number; fraction: number } | null): void {
+		if (!position) return;
+		const page = this.pages[position.index];
+		if (page) this.container.scrollTop = this.pageTop(page) + position.fraction * page.height;
 	}
 
 	private getVisiblePages(): { first: number; last: number } {
@@ -308,6 +342,7 @@ export class PDFViewerCore {
 		const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
 		if (newScale === this.currentScale) return;
 
+		const position = this.readingPosition();
 		this.currentScale = newScale;
 
 		// Update all pages
@@ -315,6 +350,7 @@ export class PDFViewerCore {
 			page.update({ scale: newScale });
 		}
 
+		this.restoreReadingPosition(position);
 		this.eventBus.dispatch('scalechanged', { scale: newScale });
 		this.rebuildPageOffsets();
 		this.updateVisiblePages();
@@ -328,6 +364,7 @@ export class PDFViewerCore {
 		const newRotation = ((value % 360) + 360) % 360;
 		if (newRotation === this.currentRotation) return;
 
+		const position = this.readingPosition();
 		this.currentRotation = newRotation;
 
 		// Update all pages
@@ -335,6 +372,8 @@ export class PDFViewerCore {
 			page.update({ rotation: newRotation });
 		}
 
+		this.restoreReadingPosition(position);
+		this.rebuildPageOffsets();
 		this.eventBus.dispatch('rotationchanged', { rotation: newRotation });
 		this.updateVisiblePages();
 	}
@@ -359,7 +398,10 @@ export class PDFViewerCore {
 		if (pageNumber < 1 || pageNumber > this.pages.length) return;
 
 		this.jumpTargetIdx = pageNumber - 1;
-		this.pages[this.jumpTargetIdx].div.scrollIntoView({ behavior: 'instant', block: 'start' });
+		this.container.scrollTo({
+			top: this.pageTop(this.pages[this.jumpTargetIdx]),
+			behavior: 'instant'
+		});
 		this.updateVisiblePages();
 		this.eventBus.dispatch('pagechanged', { pageNumber });
 	}
@@ -383,7 +425,7 @@ export class PDFViewerCore {
 		const containerRect = this.container.getBoundingClientRect();
 
 		// Get the actual page's offset from the DOM (more accurate than calculating)
-		const pageOffsetTop = pageView.div.offsetTop;
+		const pageOffsetTop = this.pageTop(pageView);
 
 		// Get the page dimensions (scaled)
 		const pageHeight = pageView.height;
@@ -396,7 +438,12 @@ export class PDFViewerCore {
 
 		// Calculate the scroll position to center the point
 		const targetScrollTop = pageOffsetTop + pointYInScreen - containerRect.height / 2;
-		const targetScrollLeft = pointXInScreen - containerRect.width / 2;
+		const pageLeft =
+			pageView.div.getBoundingClientRect().left -
+			containerRect.left -
+			this.container.clientLeft +
+			this.container.scrollLeft;
+		const targetScrollLeft = pageLeft + pointXInScreen - containerRect.width / 2;
 
 		// Scroll to the target position with specified behavior
 		this.container.scrollTo({
@@ -445,6 +492,8 @@ export class PDFViewerCore {
 	}
 
 	cleanup(): void {
+		this.documentGeneration++;
+		this.pageOffsets = [];
 		// Cancel all rendering
 		for (const page of this.pages) {
 			page.destroy();

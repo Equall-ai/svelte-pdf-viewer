@@ -528,3 +528,65 @@ Several files in this project are derivative works based on PDF.js viewer source
 | `renderer-styles.css` | `web/text_layer_builder.css`                            |
 
 These files retain the original Apache 2.0 license headers with attribution to the Mozilla Foundation.
+
+## Shared document surface and margin
+
+Use a renderer margin when application content should scroll with the document.
+The renderer keeps one scroll viewport spanning both columns, with its scrollbar
+at the right edge. The margin stays in CSS pixels as the PDF zooms.
+
+```svelte
+<PdfRenderer marginWidth={open ? 288 : 0}>
+	{#snippet margin(surface)}
+		<YourMargin {surface} />
+	{/snippet}
+	{#snippet surfaceOverlay(surface)}
+		<YourConnectors {surface} />
+	{/snippet}
+</PdfRenderer>
+```
+
+Both snippets receive a `PdfDocumentSurface`: `width`, `height`, `pages`,
+`margin`, `viewport`, and `layoutRevision`. Rectangles use CSS pixels relative
+to the surface's top-left. `viewport` moves as the reader scrolls;
+`layoutRevision` changes only when layout changes. The optional
+`onSurfaceChange` callback receives the same snapshot, and `null` on teardown.
+
+The snippets are rendered in light DOM and distributed through Shadow DOM slots,
+so application styles, Svelte context, text selection, and native keyboard focus
+continue to work. `surfaceOverlay` is non-interactive. Margin content participates
+in the surface height: when positioning cards absolutely, give their parent an
+explicit height that includes the last card. Avoid sizing it from `surface.height`
+plus padding, which would create a feedback loop; use `surface.pages.height` and
+card positions instead. Width zero hides the margin while preserving its state.
+The package does not choose card order, collision handling, or selection behavior.
+
+Subscribe to anchor positions from a descendant of `PdfViewer`:
+
+```ts
+const context = getPdfViewerContext();
+$effect(() =>
+	context.observeDocumentAnchor(
+		{ page: 1, x_min: 10, x_max: 50, y_min: 20, y_max: 25 },
+		(geometry) => {
+			anchorGeometry = geometry;
+		}
+	)
+);
+```
+
+The callback receives `{ rect, visible, layoutRevision }` or `null` while the
+renderer/page is unavailable. `rect` remains available offscreen and uses the
+same surface coordinates as the snippets. Percentage anchors use the rendered
+page's orientation, matching `PdfOverlayAnchor`; `{ boxId }` measures the actual
+rendered bounding box. Page shells exist independently of lazy canvas rendering.
+Subscriptions survive renderer replacement and return an unsubscribe function.
+The existing `PdfAnchoredOverlay` API keeps its viewport-clipped behavior.
+
+At the core layer, `PDFViewerOptions.pageContainer` optionally separates the
+page mount target from `container`, the scrolling viewport. Existing callers
+retain their original structure. Scale and rotation preserve the top visible
+page's relative reading position; margin width changes do not reload the PDF or
+change its scale. Page fitting remains controlled through the viewer's existing
+page-width/scale settings. See the `/surface` demo for resizing, zoom, rotation,
+source replacement, and overflowing margin content.

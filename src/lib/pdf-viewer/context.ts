@@ -3,7 +3,7 @@
  */
 import { getContext, setContext } from 'svelte';
 import type { BoundingBox } from './BoundingBoxLayer.js';
-import type { PdfAnchorObserver } from './overlayAnchor.js';
+import type { PdfAnchorObserver, PdfDocumentAnchorObserver } from './overlayAnchor.js';
 
 const PDF_VIEWER_CONTEXT_KEY = Symbol('pdf-viewer');
 
@@ -107,6 +107,10 @@ export interface PdfViewerActions {
 }
 
 export interface PdfViewerContext {
+	/** Observe surface-relative positions, including offscreen anchors. */
+	observeDocumentAnchor: PdfDocumentAnchorObserver;
+	/** Internal renderer lifecycle registration for document anchors. */
+	_registerDocumentAnchorObserver: (observer: PdfDocumentAnchorObserver) => () => void;
 	/** Internal geometry subscription used by PdfAnchoredOverlay. */
 	_observeAnchor: PdfAnchorObserver;
 	/** Internal renderer lifecycle registration. */

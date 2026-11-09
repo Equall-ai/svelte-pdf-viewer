@@ -18,6 +18,17 @@ export interface PdfOverlayPlacementOptions {
 	gap?: number;
 }
 
+/** Stable surface coordinates remain available when an anchor scrolls out of view. */
+export interface PdfDocumentAnchorGeometry {
+	rect: DOMRect;
+	visible: boolean;
+	layoutRevision: number;
+}
+export type PdfDocumentAnchorObserver = (
+	anchor: PdfOverlayAnchor,
+	onBounds: (geometry: PdfDocumentAnchorGeometry | null) => void
+) => () => void;
+
 export type PdfAnchorObserver = (
 	anchor: PdfOverlayAnchor,
 	onBounds: (bounds: PdfAnchorBounds | null) => void
@@ -76,9 +87,48 @@ interface RendererElements {
 
 /** Internal renderer implementation used by PdfAnchoredOverlay. */
 export function observePdfAnchor(
-	{ host, root, viewport }: RendererElements,
+	elements: RendererElements,
 	anchor: PdfOverlayAnchor,
 	onBounds: (bounds: PdfAnchorBounds | null) => void
+): () => void {
+	return observeAnchorGeometry(elements, anchor, onBounds);
+}
+
+/** Measure anchors in the shared document surface, independently of visibility. */
+export function observePdfDocumentAnchor(
+	elements: RendererElements & { surface: HTMLElement; layoutRevision: () => number },
+	anchor: PdfOverlayAnchor,
+	onBounds: (geometry: PdfDocumentAnchorGeometry | null) => void
+): () => void {
+	return observeAnchorGeometry(
+		elements,
+		anchor,
+		(bounds) => {
+			if (!bounds) {
+				onBounds(null);
+				return;
+			}
+			const origin = elements.surface.getBoundingClientRect();
+			onBounds({
+				rect: new DOMRect(
+					bounds.anchor.x - origin.x,
+					bounds.anchor.y - origin.y,
+					bounds.anchor.width,
+					bounds.anchor.height
+				),
+				visible: intersects(bounds.anchor, bounds.viewport),
+				layoutRevision: elements.layoutRevision()
+			});
+		},
+		true
+	);
+}
+
+function observeAnchorGeometry(
+	{ host, root, viewport }: RendererElements,
+	anchor: PdfOverlayAnchor,
+	onBounds: (bounds: PdfAnchorBounds | null) => void,
+	includeOffscreen = false
 ): () => void {
 	let frame = 0;
 	let stopped = false;
@@ -92,7 +142,7 @@ export function observePdfAnchor(
 	const mutations = new MutationObserver(schedule);
 	const publish = (bounds: PdfAnchorBounds | null) => {
 		const key = JSON.stringify(bounds);
-		if (key === last) return;
+		if (!includeOffscreen && key === last) return;
 		last = key;
 		onBounds(bounds);
 	};
@@ -154,7 +204,9 @@ export function observePdfAnchor(
 		const right = Math.min(window.innerWidth, outer.right, scroll.right);
 		const bottom = Math.min(window.innerHeight, outer.bottom, scroll.bottom);
 		const visible = new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
-		publish(intersects(bounds, visible) ? { anchor: bounds, viewport: visible } : null);
+		publish(
+			includeOffscreen || intersects(bounds, visible) ? { anchor: bounds, viewport: visible } : null
+		);
 	}
 	resize.observe(host);
 	resize.observe(viewport);
@@ -164,6 +216,7 @@ export function observePdfAnchor(
 		attributes: true,
 		attributeFilter: ['style', 'class', 'data-box-id', 'data-page-number']
 	});
+	viewport.addEventListener('pdf-layout-change', schedule);
 	root.addEventListener('scroll', schedule, true);
 	window.addEventListener('scroll', schedule, true);
 	window.addEventListener('resize', schedule);
@@ -175,6 +228,7 @@ export function observePdfAnchor(
 		cancelAnimationFrame(frame);
 		resize.disconnect();
 		mutations.disconnect();
+		viewport.removeEventListener('pdf-layout-change', schedule);
 		root.removeEventListener('scroll', schedule, true);
 		window.removeEventListener('scroll', schedule, true);
 		window.removeEventListener('resize', schedule);
@@ -185,13 +239,17 @@ export function observePdfAnchor(
 }
 
 /** Keep subscriptions valid when a renderer mounts late or is replaced. */
-export function createAnchorRegistry() {
+export function createAnchorRegistry<Geometry = PdfAnchorBounds>() {
+	type Observer = (
+		anchor: PdfOverlayAnchor,
+		callback: (geometry: Geometry | null) => void
+	) => () => void;
 	const entries = new Set<{
 		anchor: PdfOverlayAnchor;
-		callback: (bounds: PdfAnchorBounds | null) => void;
+		callback: (bounds: Geometry | null) => void;
 		stop?: () => void;
 	}>();
-	let observer: PdfAnchorObserver | null = null;
+	let observer: Observer | null = null;
 	const reset = () => {
 		for (const entry of entries) {
 			entry.stop?.();
@@ -199,7 +257,7 @@ export function createAnchorRegistry() {
 			entry.callback(null);
 		}
 	};
-	const observe: PdfAnchorObserver = (anchor, callback) => {
+	const observe: Observer = (anchor, callback) => {
 		const entry: { anchor: PdfOverlayAnchor; callback: typeof callback; stop?: () => void } = {
 			anchor,
 			callback
@@ -214,7 +272,7 @@ export function createAnchorRegistry() {
 	};
 	return {
 		observe,
-		attach(next: PdfAnchorObserver) {
+		attach(next: Observer) {
 			reset();
 			observer = next;
 			for (const entry of entries) entry.stop = next(entry.anchor, entry.callback);

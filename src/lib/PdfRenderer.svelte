@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { BROWSER } from 'esm-env';
-	import { onDestroy, onMount } from 'svelte';
-	import { observePdfAnchor } from './pdf-viewer/overlayAnchor.js';
+	import { onDestroy, onMount, untrack, type Snippet } from 'svelte';
+	import { observeDocumentSurface, type PdfDocumentSurface } from './pdf-viewer/documentSurface.js';
+	import { observePdfAnchor, observePdfDocumentAnchor } from './pdf-viewer/overlayAnchor.js';
 	import {
 		getPdfViewerContext,
 		type PdfViewerActions,
@@ -14,6 +15,14 @@
 	import type { BoundingBox } from './pdf-viewer/BoundingBoxLayer.js';
 
 	interface Props {
+		/** Reserved margin width in CSS pixels; changes without reloading the document. */
+		marginWidth?: number;
+		/** Application-owned content in the shared scrolling margin. */
+		margin?: Snippet<[PdfDocumentSurface]>;
+		/** Non-interactive connectors or decoration over the complete document surface. */
+		surfaceOverlay?: Snippet<[PdfDocumentSurface]>;
+		/** Reports surface-relative layout and viewport geometry. */
+		onSurfaceChange?: (surface: PdfDocumentSurface | null) => void;
 		/** PDF source - URL string, ArrayBuffer, Uint8Array, or Blob. If not provided, uses src from PdfViewer context. */
 		src?: PdfSource;
 		/** Background color of the scroll container */
@@ -33,6 +42,10 @@
 	}
 
 	let {
+		marginWidth = 0,
+		margin,
+		surfaceOverlay,
+		onSurfaceChange,
 		src: srcProp,
 		backgroundColor = '#e8e8e8',
 		pageShadow = '0 2px 8px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)',
@@ -57,9 +70,19 @@
 	let boundingBoxes = $derived.by(() => context.boundingBoxes);
 
 	let hostEl: HTMLDivElement | undefined = $state();
-	let shadowRoot: ShadowRoot | null = null;
+	let shadowRoot = $state<ShadowRoot | null>(null);
 	let scrollContainerEl: HTMLDivElement | null = null;
 	let mounted = $state(false);
+	let surfaceElement: HTMLDivElement | null = null;
+	let pageContainer: HTMLDivElement | null = null;
+	let surface = $state.raw<PdfDocumentSurface | null>(null);
+	let detachSurface: (() => void) | undefined;
+	let detachDocumentAnchors: (() => void) | undefined;
+	let loadGeneration = 0;
+	let loadingTask: import('pdfjs-dist/legacy/build/pdf.mjs').PDFDocumentLoadingTask | null = null;
+	const effectiveMarginWidth = $derived(
+		margin && Number.isFinite(marginWidth) ? Math.max(0, marginWidth) : 0
+	);
 	let textSelectionAbortController: AbortController | null = null;
 
 	// Core instances
@@ -77,10 +100,18 @@
 		}
 	});
 
+	function assignSlot(element: HTMLElement, name: string) {
+		element.slot = name;
+	}
+
 	async function loadPdf(source: PdfSource) {
 		if (!BROWSER || !scrollContainerEl) return;
 
+		const generation = ++loadGeneration;
+		void loadingTask?.destroy().catch(() => {});
+		loadingTask = null;
 		viewerState.loading = true;
+		viewerState.pageDimensions = new Map();
 		viewerState.error = null;
 
 		// Cleanup previous viewer
@@ -89,23 +120,24 @@
 			viewer = null;
 		}
 
-		// Clear any orphaned elements in scroll container
-		scrollContainerEl.innerHTML = '';
+		// Only PDF-owned nodes are retired; slots and consumer state survive source changes.
 
 		let newViewer: import('./pdf-viewer/PDFViewerCore.js').PDFViewerCore | null = null;
 
 		try {
 			const pdfjs = await getPdfJs();
-			if (!pdfjs) return;
+			if (!pdfjs || generation !== loadGeneration) return;
 
 			const { PDFViewerCore } = await import('./pdf-viewer/PDFViewerCore.js');
 			const { FindController } = await import('./pdf-viewer/FindController.js');
 			const { EventBus } = await import('./pdf-viewer/EventBus.js');
 
+			if (generation !== loadGeneration) return;
 			const eventBus = new EventBus();
 
 			newViewer = new PDFViewerCore({
 				container: scrollContainerEl,
+				pageContainer: pageContainer ?? undefined,
 				eventBus,
 				initialScale: viewerState.scale,
 				initialRotation: viewerState.rotation,
@@ -120,7 +152,7 @@
 				createLoadingIndicator
 			});
 
-			findController = new FindController(newViewer, eventBus);
+			const nextFindController = new FindController(newViewer, eventBus);
 
 			// Setup event listeners
 			eventBus.on('scalechanged', (data: Record<string, unknown>) => {
@@ -166,6 +198,10 @@
 			} else if (source instanceof Blob) {
 				// Convert Blob to ArrayBuffer
 				const arrayBuffer = await source.arrayBuffer();
+				if (generation !== loadGeneration) {
+					newViewer.destroy();
+					return;
+				}
 				_setSrcDataForDownload(arrayBuffer.slice(0)); // Store a copy for download
 				documentSource = { data: arrayBuffer };
 			} else if (source instanceof ArrayBuffer) {
@@ -183,11 +219,22 @@
 			const docParams: Record<string, unknown> =
 				typeof documentSource === 'string' ? { url: documentSource } : { ...documentSource };
 			if (worker) docParams.worker = worker;
-			const loadingTask = pdfjs.getDocument(docParams);
-			const loadedPdfDocument = await loadingTask.promise;
+			const nextLoadingTask = pdfjs.getDocument(docParams);
+			loadingTask = nextLoadingTask;
+			const loadedPdfDocument = await nextLoadingTask.promise;
+			if (generation !== loadGeneration) {
+				newViewer.destroy();
+				await loadedPdfDocument.destroy();
+				return;
+			}
 
 			await newViewer.setDocument(loadedPdfDocument);
-			findController.setDocument(loadedPdfDocument);
+			if (generation !== loadGeneration) {
+				newViewer.destroy();
+				await loadedPdfDocument.destroy();
+				return;
+			}
+			nextFindController.setDocument(loadedPdfDocument);
 
 			// Set document on presentation mode
 			presentationMode.setDocument(loadedPdfDocument);
@@ -205,7 +252,12 @@
 				}
 			}
 
+			if (generation !== loadGeneration) {
+				newViewer.destroy();
+				return;
+			}
 			viewer = newViewer;
+			findController = nextFindController;
 			viewerState.loading = false;
 		} catch (e) {
 			// Clean up the viewer that was created before the error
@@ -213,6 +265,7 @@
 				newViewer.destroy();
 				newViewer = null;
 			}
+			if (generation !== loadGeneration) return;
 			findController = null;
 
 			const errorMessage = e instanceof Error ? e.message : 'Failed to load PDF';
@@ -228,7 +281,10 @@
 		if (!_onTextHighlighted) return;
 
 		// Try to get selection from shadow root first, then fall back to window
-		const selection = shadowRoot?.getSelection() || window.getSelection();
+		const selection =
+			(
+				shadowRoot as (ShadowRoot & { getSelection?: () => Selection | null }) | null
+			)?.getSelection?.() ?? window.getSelection();
 		if (!selection || selection.rangeCount === 0) return;
 
 		const selectedText = selection.toString().trim();
@@ -236,6 +292,11 @@
 
 		// Get the bounding rectangle of the selection
 		const range = selection.getRangeAt(0);
+		if (
+			range.startContainer.getRootNode() !== shadowRoot ||
+			range.endContainer.getRootNode() !== shadowRoot
+		)
+			return;
 		const rect = range.getBoundingClientRect();
 
 		// Fire the callback with text and position data
@@ -326,12 +387,57 @@
 			scrollContainerEl = document.createElement('div');
 			scrollContainerEl.className = 'pdf-scroll-container';
 			container.appendChild(scrollContainerEl);
+			surfaceElement = document.createElement('div');
+			surfaceElement.className = 'pdf-document-surface';
+			pageContainer = document.createElement('div');
+			pageContainer.className = 'pdf-page-column';
+			const marginColumn = document.createElement('div');
+			marginColumn.className = 'pdf-margin-column';
+			const marginSlot = document.createElement('slot');
+			marginSlot.name = 'margin';
+			marginColumn.append(marginSlot);
+			const overlay = document.createElement('div');
+			overlay.className = 'pdf-surface-overlay';
+			const overlaySlot = document.createElement('slot');
+			overlaySlot.name = 'surface-overlay';
+			overlay.append(overlaySlot);
+			surfaceElement.append(pageContainer, marginColumn, overlay);
+			scrollContainerEl.append(surfaceElement);
 
 			shadowRoot.appendChild(container);
 
 			// Register actions
 			_registerRenderer(rendererActions);
 			const elements = { host: hostEl, root: shadowRoot, viewport: scrollContainerEl };
+			detachSurface = observeDocumentSurface(
+				{
+					viewport: scrollContainerEl,
+					surface: surfaceElement,
+					pages: pageContainer,
+					margin: marginColumn
+				},
+				(next) => {
+					const layoutChanged = surface?.layoutRevision !== next.layoutRevision;
+					surface = next;
+					if (layoutChanged) viewer?.refreshLayout();
+					onSurfaceChange?.(next);
+				}
+			);
+			detachDocumentAnchors = context._registerDocumentAnchorObserver(anchorObserver);
+			function anchorObserver(
+				anchor: Parameters<typeof observePdfDocumentAnchor>[1],
+				callback: Parameters<typeof observePdfDocumentAnchor>[2]
+			) {
+				return observePdfDocumentAnchor(
+					{
+						...elements,
+						surface: surfaceElement!,
+						layoutRevision: () => surface?.layoutRevision ?? 0
+					},
+					anchor,
+					callback
+				);
+			}
 			detachAnchorObserver = context._registerAnchorObserver((anchor, callback) =>
 				observePdfAnchor(elements, anchor, callback)
 			);
@@ -351,8 +457,17 @@
 	// Load PDF when src changes
 	$effect(() => {
 		if (BROWSER && src && scrollContainerEl && mounted) {
-			loadPdf(src);
+			untrack(() => {
+				void loadPdf(src);
+			});
 		}
+	});
+
+	// Width changes update layout without recreating the PDF or its consumer snippets.
+	$effect(() => {
+		const width = effectiveMarginWidth;
+		if (mounted && surfaceElement)
+			surfaceElement.style.setProperty('--pdf-margin-width', width + 'px');
 	});
 
 	// Update bounding boxes when they change
@@ -369,7 +484,12 @@
 	}
 
 	onDestroy(() => {
+		loadGeneration++;
+		void loadingTask?.destroy().catch(() => {});
 		detachAnchorObserver?.();
+		detachDocumentAnchors?.();
+		detachSurface?.();
+		onSurfaceChange?.(null);
 		if (viewer) {
 			viewer.destroy();
 			viewer = null;
@@ -385,7 +505,22 @@
 </script>
 
 <div class="pdf-renderer-wrapper">
-	<div bind:this={hostEl} class="pdf-renderer-host"></div>
+	<div bind:this={hostEl} class="pdf-renderer-host">
+		{#if margin && surface}
+			<div
+				use:assignSlot={'margin'}
+				class="pdf-consumer-margin"
+				hidden={effectiveMarginWidth === 0}
+			>
+				{@render margin(surface)}
+			</div>
+		{/if}
+		{#if surfaceOverlay && surface}
+			<div use:assignSlot={'surface-overlay'} class="pdf-consumer-overlay">
+				{@render surfaceOverlay(surface)}
+			</div>
+		{/if}
+	</div>
 	{#if !viewerState.loading && mounted}
 		<BoundingBoxOverlay
 			{context}
@@ -404,6 +539,16 @@
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
+	}
+
+	.pdf-consumer-margin {
+		position: relative;
+		width: 100%;
+	}
+	.pdf-consumer-overlay {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
 	}
 
 	.pdf-renderer-host {

@@ -43,6 +43,22 @@ export const rendererStyles = `
 	background-color: var(--pdf-background-color);
 }
 
+/* The PDF and slotted application content share one scrolling surface. */
+.pdf-document-surface {
+ position: relative;
+ display: grid;
+ grid-template-columns: minmax(max-content, 1fr) var(--pdf-margin-width, 0px);
+ align-items: start;
+ width: 100%;
+ min-width: max-content;
+ min-height: 100%;
+ overflow-anchor: none;
+}
+.pdf-page-column { min-width: 0; }
+.pdf-margin-column { position: relative; min-width: 0; align-self: stretch; }
+.pdf-surface-overlay { position: absolute; inset: 0; pointer-events: none; }
+slot[name="margin"], slot[name="surface-overlay"] { display: contents; }
+
 /* Custom scrollbar styling */
 .pdf-scroll-container::-webkit-scrollbar {
 	width: var(--pdf-scrollbar-width);
