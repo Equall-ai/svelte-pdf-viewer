@@ -27,5 +27,16 @@ export type {
 } from './pdf-viewer/BoundingBoxLayer.js';
 export { convertNormalizedBoundingBoxes } from './pdf-viewer/BoundingBoxLayer.js';
 
+// Render consumer-provided content beside a page rectangle or registered bounding box.
+export { default as PdfAnchoredOverlay } from './PdfAnchoredOverlay.svelte';
+export type { PdfOverlayAnchor, PdfOverlayPlacementOptions } from './pdf-viewer/overlayAnchor.js';
+
 // Export PDF.js singleton utilities
 export { configurePdfWorker, destroyPdfJs } from './pdf-viewer/pdfjs-singleton.js';
+
+// Shared document surface and offscreen anchor geometry.
+export type { PdfDocumentSurface, PdfSurfaceRect } from './pdf-viewer/documentSurface.js';
+export type {
+	PdfDocumentAnchorGeometry,
+	PdfDocumentAnchorObserver
+} from './pdf-viewer/overlayAnchor.js';

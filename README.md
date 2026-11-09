@@ -114,6 +114,66 @@ The `src` prop is passed to `PdfViewer` and automatically shared with `PdfRender
 
 ## Components
 
+### Custom bounding-box overlays
+
+A bounding box can include an `overlay` snippet. The viewer renders it in the normal
+DOM above the box, so your application's styles and components work normally.
+The viewer owns scrolling, zoom, rotation, visibility, and placement.
+
+`overlay` receives `{ box, visible }`. The snippet stays mounted when its anchor scrolls
+offscreen; use `visible` to control presentation without resetting its owning component's
+state. `visible` tracks the anchor, independently of content size. Content that cannot
+fit in the viewport is hidden while retaining its measured size.
+`overlayPlacement` accepts `side: 'top' | 'bottom'`,
+`align: 'start' | 'center' | 'end'`, and `gap` in pixels. Defaults are top/end/6;
+the viewer flips and clamps the overlay into the visible viewport.
+
+```svelte
+<script lang="ts">
+	import { PdfViewer, PdfRenderer, type BoundingBox } from '@equall-ai/svelte-pdf-viewer';
+</script>
+
+{#snippet controls({ box, visible }: { box: BoundingBox; visible: boolean })}
+	{#if visible}<span class="my-overlay">Page {box.page}</span>{/if}
+{/snippet}
+
+<PdfViewer
+	src="/document.pdf"
+	boundingBoxes={[
+		{ id: 'example', page: 1, x: 72, y: 600, width: 150, height: 24, overlay: controls }
+	]}
+>
+	<PdfRenderer />
+</PdfViewer>
+```
+
+For custom highlights rendered by your app, use `PdfAnchoredOverlay` with a
+normalized page rectangle and a child snippet. No highlight ID or DOM lookup is
+required. Coordinates are percentages with a top-left origin in the rendered page's
+orientation; pages are 1-indexed in the loaded PDF. Translate absolute page numbers
+first if your app loads only a page range. An existing package bounding box can also
+be targeted with `anchor={{ boxId: 'example' }}`.
+
+```svelte
+<script lang="ts">
+	import { PdfAnchoredOverlay, type PdfOverlayAnchor } from '@equall-ai/svelte-pdf-viewer';
+	let { anchor }: { anchor: PdfOverlayAnchor } = $props();
+</script>
+
+<PdfAnchoredOverlay {anchor}>
+	{#snippet children({ visible })}
+		{#if visible}<span class="my-overlay">Your control</span>{/if}
+	{/snippet}
+</PdfAnchoredOverlay>
+```
+
+This component normally inherits context from `PdfViewer`. When rendering elsewhere,
+pass a retained `getPdfViewerContext()` value through its optional `context` prop.
+Render it within a positioned container covering the viewer. It remains outside the
+PDF shadow root and rotates independently of the page. No measurement or positioning
+code is needed in the consumer. The same `side`, `align`, and `gap` options are
+available as component props. Use `anchor={null}` to hide and detach it.
+
 ### `<PdfViewer>`
 
 The main container component that provides context for toolbar and renderer.
@@ -124,19 +184,19 @@ The main container component that provides context for toolbar and renderer.
 </PdfViewer>
 ```
 
-| Prop                | Type                                | Default  | Description                                                                    |
-| ------------------- | ----------------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `src`               | `PdfSource`                         | required | PDF source (URL, ArrayBuffer, Uint8Array, or Blob)                             |
-| `imageResourcesPath` | `string` | `''` | URL directory for PDF.js annotation icons, including a trailing slash. |
-| `scale`             | `number`                            | `1.0`    | Initial zoom scale                                                             |
-| `pageWidth`         | `number`                            | -        | Desired page width in pixels. Overrides `scale` by computing it automatically. |
-| `currentPage`       | `number`                            | `1`      | Current page (1-indexed). Bindable — updates on scroll, setting it navigates.  |
-| `downloadFilename`  | `string`                            | -        | Custom filename for PDF download (default: from URL or 'document.pdf')         |
-| `onerror`           | `(error: string) => void`           | -        | Callback when PDF fails to load                                                |
-| `onTextHighlighted` | `(data: TextHighlightData) => void` | -        | Callback when text is selected in the PDF                                      |
-| `boundingBoxes`     | `BoundingBox[]`                     | `[]`     | Bounding boxes to render on PDF pages                                          |
-| `drawMode`          | `boolean`                           | `false`  | Enable drawing mode for creating bounding boxes                                |
-| `class`             | `string`                            | `''`     | CSS class for the container                                                    |
+| Prop                 | Type                                | Default  | Description                                                                    |
+| -------------------- | ----------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `src`                | `PdfSource`                         | required | PDF source (URL, ArrayBuffer, Uint8Array, or Blob)                             |
+| `imageResourcesPath` | `string`                            | `''`     | URL directory for PDF.js annotation icons, including a trailing slash.         |
+| `scale`              | `number`                            | `1.0`    | Initial zoom scale                                                             |
+| `pageWidth`          | `number`                            | -        | Desired page width in pixels. Overrides `scale` by computing it automatically. |
+| `currentPage`        | `number`                            | `1`      | Current page (1-indexed). Bindable — updates on scroll, setting it navigates.  |
+| `downloadFilename`   | `string`                            | -        | Custom filename for PDF download (default: from URL or 'document.pdf')         |
+| `onerror`            | `(error: string) => void`           | -        | Callback when PDF fails to load                                                |
+| `onTextHighlighted`  | `(data: TextHighlightData) => void` | -        | Callback when text is selected in the PDF                                      |
+| `boundingBoxes`      | `BoundingBox[]`                     | `[]`     | Bounding boxes to render on PDF pages                                          |
+| `drawMode`           | `boolean`                           | `false`  | Enable drawing mode for creating bounding boxes                                |
+| `class`              | `string`                            | `''`     | CSS class for the container                                                    |
 
 #### Annotation images
 
@@ -468,3 +528,65 @@ Several files in this project are derivative works based on PDF.js viewer source
 | `renderer-styles.css` | `web/text_layer_builder.css`                            |
 
 These files retain the original Apache 2.0 license headers with attribution to the Mozilla Foundation.
+
+## Shared document surface and margin
+
+Use a renderer margin when application content should scroll with the document.
+The renderer keeps one scroll viewport spanning both columns, with its scrollbar
+at the right edge. The margin stays in CSS pixels as the PDF zooms.
+
+```svelte
+<PdfRenderer marginWidth={open ? 288 : 0}>
+	{#snippet margin(surface)}
+		<YourMargin {surface} />
+	{/snippet}
+	{#snippet surfaceOverlay(surface)}
+		<YourConnectors {surface} />
+	{/snippet}
+</PdfRenderer>
+```
+
+Both snippets receive a `PdfDocumentSurface`: `width`, `height`, `pages`,
+`margin`, `viewport`, and `layoutRevision`. Rectangles use CSS pixels relative
+to the surface's top-left. `viewport` moves as the reader scrolls;
+`layoutRevision` changes only when layout changes. The optional
+`onSurfaceChange` callback receives the same snapshot, and `null` on teardown.
+
+The snippets are rendered in light DOM and distributed through Shadow DOM slots,
+so application styles, Svelte context, text selection, and native keyboard focus
+continue to work. `surfaceOverlay` is non-interactive. Margin content participates
+in the surface height: when positioning cards absolutely, give their parent an
+explicit height that includes the last card. Avoid sizing it from `surface.height`
+plus padding, which would create a feedback loop; use `surface.pages.height` and
+card positions instead. Width zero hides the margin while preserving its state.
+The package does not choose card order, collision handling, or selection behavior.
+
+Subscribe to anchor positions from a descendant of `PdfViewer`:
+
+```ts
+const context = getPdfViewerContext();
+$effect(() =>
+	context.observeDocumentAnchor(
+		{ page: 1, x_min: 10, x_max: 50, y_min: 20, y_max: 25 },
+		(geometry) => {
+			anchorGeometry = geometry;
+		}
+	)
+);
+```
+
+The callback receives `{ rect, visible, layoutRevision }` or `null` while the
+renderer/page is unavailable. `rect` remains available offscreen and uses the
+same surface coordinates as the snippets. Percentage anchors use the rendered
+page's orientation, matching `PdfOverlayAnchor`; `{ boxId }` measures the actual
+rendered bounding box. Page shells exist independently of lazy canvas rendering.
+Subscriptions survive renderer replacement and return an unsubscribe function.
+The existing `PdfAnchoredOverlay` API keeps its viewport-clipped behavior.
+
+At the core layer, `PDFViewerOptions.pageContainer` optionally separates the
+page mount target from `container`, the scrolling viewport. Existing callers
+retain their original structure. Scale and rotation preserve the top visible
+page's relative reading position; margin width changes do not reload the PDF or
+change its scale. Page fitting remains controlled through the viewer's existing
+page-width/scale settings. See the `/surface` demo for resizing, zoom, rotation,
+source replacement, and overflowing margin content.

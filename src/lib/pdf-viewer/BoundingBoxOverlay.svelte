@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import type { BoundingBox } from './BoundingBoxLayer.js';
-	import type { PageDimensions } from './context.js';
+	import { getBoundingBoxAnchorId, type BoundingBox } from './BoundingBoxLayer.js';
+	import type { PageDimensions, PdfViewerContext } from './context.js';
+	import PdfAnchoredOverlay from '../PdfAnchoredOverlay.svelte';
 
 	interface Props {
+		context: PdfViewerContext;
 		/** Bounding boxes to render close buttons for */
 		boxes: BoundingBox[];
 		/** Current scale of the PDF viewer */
@@ -16,7 +18,7 @@
 		onClose?: (box: BoundingBox) => void;
 	}
 
-	let { boxes, scale, pageDimensions, shadowRoot, onClose }: Props = $props();
+	let { context, boxes, scale, pageDimensions, shadowRoot, onClose }: Props = $props();
 
 	// Filter boxes that should show close button
 	let closableBoxes = $derived(boxes.filter((box) => box.showClose));
@@ -101,6 +103,19 @@
 </script>
 
 <div bind:this={containerEl} class="overlay-container">
+	{#each boxes.filter((box) => box.overlay) as box (box.id ?? box)}
+		{#if box.overlay}
+			<PdfAnchoredOverlay
+				{context}
+				anchor={{ boxId: getBoundingBoxAnchorId(box) }}
+				{...box.overlayPlacement}
+			>
+				{#snippet children({ visible })}
+					{@render box.overlay?.({ box, visible })}
+				{/snippet}
+			</PdfAnchoredOverlay>
+		{/if}
+	{/each}
 	{#key updateTrigger}
 		{#each closableBoxes as box (box.id)}
 			{@const position = getBoxPosition(box)}
