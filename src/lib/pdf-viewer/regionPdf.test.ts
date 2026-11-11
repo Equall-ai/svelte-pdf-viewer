@@ -50,16 +50,33 @@ it('normalizes a rotated offset CropBox and preserves source text order', async 
 	});
 	expect(reads).toBe(1);
 });
-it('rejects annotated pages rather than silently dropping their appearances', async () => {
+it('retains the original annotated page and maps its viewport into the strip', async () => {
 	const pdf = await PDFDocument.create();
 	pdf.addPage([600, 800]);
 	const bytes = await pdf.save();
 	const source = {
 		getData: async () => bytes,
-		getPage: async () => ({ getAnnotations: async () => [{ annotationType: 20 }] })
+		getPage: async () => ({
+			rotate: 0,
+			userUnit: 1,
+			view: [0, 0, 600, 800],
+			getViewport: () => ({ width: 600, height: 800, transform: [1, 0, 0, -1, 0, 800] }),
+			getAnnotations: async () => [{ annotationType: 20 }]
+		})
 	} as unknown as PDFDocumentProxy;
 	const generator = await RegionPdfSource.create(source);
-	await expect(
-		generator.generate({ id: 'a', region: { page: 1, y_min: 0, y_max: 100 }, regionIds: ['a'] })
-	).rejects.toThrow('annotations');
+	const generated = await generator.generate({
+		id: 'a',
+		region: { page: 1, y_min: 25, y_max: 50 },
+		regionIds: ['a']
+	});
+	expect(generated.appearance).toBeDefined();
+	const viewport = {
+		scale: 1,
+		rotation: 0,
+		transform: [1, 0, 0, -1, 0, 200]
+	} as import('pdfjs-dist/legacy/build/pdf.mjs').PageViewport;
+	expect(generated.appearance!.transform(viewport)).toEqual([1, 0, 0, 1, 0, -200]);
+	expect(generated.appearance!.includes([0, 450, 50, 500])).toBe(true);
+	expect(generated.appearance!.includes([0, 700, 50, 750])).toBe(false);
 });

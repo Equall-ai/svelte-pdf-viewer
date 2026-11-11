@@ -21,6 +21,7 @@ import type { PDFPageProxy, PageViewport, TextLayer } from 'pdfjs-dist/legacy/bu
 type TextContent = Awaited<
 	ReturnType<import('pdfjs-dist/legacy/build/pdf.mjs').PDFPageProxy['getTextContent']>
 >;
+import type { RegionAppearance } from './regionPdf.js';
 import type { EventBus } from './EventBus.js';
 import { AnnotationLayerBuilder } from './AnnotationLayerBuilder.js';
 import type { SimpleLinkService } from './SimpleLinkService.js';
@@ -39,6 +40,7 @@ async function ensurePdfJsLoaded() {
 }
 
 export interface PDFPageViewOptions {
+	sourceAppearance?: RegionAppearance;
 	sourceTextContent?: () => Promise<TextContent>;
 	clipText?: boolean;
 	container: HTMLElement;
@@ -90,6 +92,8 @@ export class PDFPageView {
 	private imageResourcesPath: string;
 	private annotationLayerBuilder: AnnotationLayerBuilder | null = null;
 	private annotationLayerRendered = false;
+	private annotationWrapper: HTMLDivElement | null = null;
+	private sourceAppearance?: RegionAppearance;
 
 	// Bounding box layer
 	private boundingBoxLayer: BoundingBoxLayer | null = null;
@@ -122,6 +126,7 @@ export class PDFPageView {
 	constructor(options: PDFPageViewOptions) {
 		this.id = options.id;
 		this.sourceTextContent = options.sourceTextContent;
+		this.sourceAppearance = options.sourceAppearance;
 		this.clipText = options.clipText ?? false;
 		this.container = options.container;
 		this.eventBus = options.eventBus;
@@ -289,6 +294,8 @@ export class PDFPageView {
 			this.annotationLayerBuilder.destroy();
 			this.annotationLayerBuilder = null;
 		}
+		this.annotationWrapper?.remove();
+		this.annotationWrapper = null;
 		this.annotationLayerRendered = false;
 
 		// Clear bounding box layer
@@ -350,9 +357,10 @@ export class PDFPageView {
 			const ctx = this.canvas.getContext('2d')!;
 			ctx.scale(outputScale, outputScale);
 
-			this.renderTask = this.pdfPage.render({
+			this.renderTask = (this.sourceAppearance?.page ?? this.pdfPage).render({
 				canvasContext: ctx,
-				viewport: this.viewport,
+				viewport: this.sourceAppearance?.viewport(this.viewport) ?? this.viewport,
+				transform: this.sourceAppearance?.transform(this.viewport),
 				canvas: this.canvas
 			});
 
@@ -502,16 +510,34 @@ export class PDFPageView {
 		try {
 			this.annotationLayerBuilder = new AnnotationLayerBuilder({
 				imageResourcesPath: this.imageResourcesPath,
-				pdfPage: this.pdfPage,
+				pdfPage: this.sourceAppearance?.page ?? this.pdfPage,
+				annotationFilter: this.sourceAppearance
+					? (annotation) => !annotation.rect || this.sourceAppearance!.includes(annotation.rect)
+					: undefined,
 				linkService: this.linkService,
-				renderForms: true,
+				renderForms: !this.sourceAppearance,
 				onAppend: (div) => {
-					this.div.appendChild(div);
+					if (!this.sourceAppearance) {
+						this.div.appendChild(div);
+						return;
+					}
+					const wrapper = document.createElement('div');
+					wrapper.className = 'region-annotation-layer';
+					wrapper.style.position = 'absolute';
+					wrapper.style.inset = '0';
+					wrapper.style.zIndex = '3';
+					wrapper.style.pointerEvents = 'none';
+					wrapper.style.transformOrigin = '0 0';
+					wrapper.style.transform =
+						'matrix(' + this.sourceAppearance.transform(this.viewport).join(',') + ')';
+					this.annotationWrapper = wrapper;
+					wrapper.appendChild(div);
+					this.div.appendChild(wrapper);
 				}
 			});
 
 			await this.annotationLayerBuilder.render({
-				viewport: this.viewport
+				viewport: this.sourceAppearance?.viewport(this.viewport) ?? this.viewport
 			});
 			this.annotationLayerRendered = true;
 
@@ -520,6 +546,7 @@ export class PDFPageView {
 				source: this
 			});
 		} catch (error) {
+			if (this.sourceAppearance) throw error;
 			console.error('Error rendering annotation layer:', error);
 		}
 	}

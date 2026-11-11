@@ -31,6 +31,7 @@ async function ensurePdfJsLoaded() {
 }
 
 export interface AnnotationLayerBuilderOptions {
+	annotationFilter?: (annotation: { rect?: number[] }) => boolean;
 	pdfPage: PDFPageProxy;
 	linkService: SimpleLinkService;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,6 +48,7 @@ export interface AnnotationLayerBuilderRenderOptions {
 
 export class AnnotationLayerBuilder {
 	private pdfPage: PDFPageProxy;
+	private annotationFilter?: AnnotationLayerBuilderOptions['annotationFilter'];
 	private linkService: SimpleLinkService;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	private annotationStorage: any;
@@ -61,6 +63,7 @@ export class AnnotationLayerBuilder {
 
 	constructor(options: AnnotationLayerBuilderOptions) {
 		this.pdfPage = options.pdfPage;
+		this.annotationFilter = options.annotationFilter;
 		this.linkService = options.linkService;
 		this.annotationStorage = options.annotationStorage ?? null;
 		this.imageResourcesPath = options.imageResourcesPath ?? '';
@@ -87,7 +90,15 @@ export class AnnotationLayerBuilder {
 
 		await ensurePdfJsLoaded();
 
-		const annotations = await this.pdfPage.getAnnotations({ intent });
+		const all = await this.pdfPage.getAnnotations({ intent });
+		const visible = new Set(
+			all
+				.filter((annotation) => this.annotationFilter?.(annotation) ?? true)
+				.map((annotation) => annotation.id)
+		);
+		const annotations = all.filter(
+			(annotation) => visible.has(annotation.id) || visible.has(annotation.parentId)
+		);
 		if (this.cancelled) {
 			return;
 		}

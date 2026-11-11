@@ -794,6 +794,9 @@ export class PDFViewerCore {
 							: undefined,
 						createLoadingIndicator: this.createLoadingIndicator,
 						sourceTextContent: generated.textContent,
+						sourceAppearance: generated.appearance,
+						linkService: this.linkService,
+						imageResourcesPath: this.imageResourcesPath,
 						clipText: true
 					});
 					view.setPdfPage(page);
@@ -907,25 +910,28 @@ export class PDFViewerCore {
 			this.restoreSourcePosition(position);
 			if (!preservePosition) this.container.scrollTop = 0;
 			this.lastReadingPosition = this.captureSourcePosition();
-			this.transitionActive = true;
-			this.transitionViewport = {
-				width: this.container.clientWidth,
-				height: this.container.clientHeight
-			};
-			this.finishTransition = animateRegionChange(
-				this.viewer,
-				before,
-				next.map((p) => ({
-					fragment: p.fragment,
-					element: p.view.div,
-					rect: p.view.div.getBoundingClientRect()
-				})),
-				retired.map((p) => p.view.div),
-				preservePosition ? this.regionTransitionDuration : 0,
-				this.currentRotation,
-				retire,
-				gapRects
-			);
+			// A resize may have cancelled and released this transition during the layout frame.
+			if (!released) {
+				this.transitionActive = true;
+				this.transitionViewport = {
+					width: this.container.clientWidth,
+					height: this.container.clientHeight
+				};
+				this.finishTransition = animateRegionChange(
+					this.viewer,
+					before,
+					next.map((p) => ({
+						fragment: p.fragment,
+						element: p.view.div,
+						rect: p.view.div.getBoundingClientRect()
+					})),
+					retired.map((p) => p.view.div),
+					preservePosition ? this.regionTransitionDuration : 0,
+					this.currentRotation,
+					retire,
+					gapRects
+				);
+			}
 			const gapHeights = new Map(
 				nodes.filter((n) => n.classList.contains('pdf-region-gap')).map((n) => [n, n.offsetHeight])
 			);
