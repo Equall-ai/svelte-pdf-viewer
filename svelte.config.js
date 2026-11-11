@@ -10,6 +10,7 @@ const config = {
 	preprocess: vitePreprocess(),
 
 	kit: {
+		alias: { $snippets: 'src/routes/snippets' },
 		adapter: adapter({
 			pages: 'build',
 			assets: 'build',

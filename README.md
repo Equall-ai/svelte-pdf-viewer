@@ -590,3 +590,91 @@ page's relative reading position; margin width changes do not reload the PDF or
 change its scale. Page fitting remains controlled through the viewer's existing
 page-width/scale settings. See the `/surface` demo for resizing, zoom, rotation,
 source replacement, and overflowing margin content.
+
+## Region views and custom gap dividers
+
+`PdfRenderer` can show selected full-width passages while keeping the original document available for navigation, search, and download. Regions use the same source convention as normalized bounding boxes: one-based pages and top-origin percentages, after the PDF's intrinsic rotation and CropBox are applied. Viewer toolbar rotation does not change these inputs.
+
+```svelte
+<script lang="ts">
+	import { PdfViewer, PdfRenderer, type PdfRegion } from '@equall-ai/svelte-pdf-viewer';
+
+	let { documentUrl }: { documentUrl: string } = $props();
+	let regions = $state<PdfRegion[] | null>([
+		{ id: 'passage-a', page: 2, y_min: 25, y_max: 35 },
+		{ id: 'passage-b', page: 5, y_min: 40, y_max: 45 }
+	]);
+</script>
+
+<button onclick={() => (regions = null)}>Full document</button>
+<PdfViewer src={documentUrl}>
+	<PdfRenderer {regions} contextPadding={24} expansionStep={0.2} regionTransitionDuration={220}>
+		{#snippet gap(gap)}
+			<div class="evidence-divider" aria-busy={gap.pending}>
+				<span
+					>{gap.hiddenRange ? 'Hidden' : 'Expanded'} context: pages {gap.range.start.page}–{gap
+						.range.end.page}</span
+				>
+				{#if gap.hiddenRange && gap.before}
+					<button disabled={gap.pending} onclick={gap.revealFromStart}>Show more below</button>
+				{/if}
+				{#if gap.hiddenRange && gap.before && gap.after}
+					<button disabled={gap.pending} onclick={gap.revealAll}>Show all between</button>
+				{/if}
+				{#if gap.hiddenRange && gap.after}
+					<button disabled={gap.pending} onclick={gap.revealFromEnd}>Show more above</button>
+				{/if}
+				<button hidden={!gap.canCollapse} disabled={gap.pending} onclick={gap.collapse}
+					>Collapse context</button
+				>
+				{#if gap.error}<p role="alert">{gap.error}</p>{/if}
+			</div>
+		{/snippet}
+	</PdfRenderer>
+</PdfViewer>
+
+<style>
+	.evidence-divider {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		padding: 12px;
+		background: #eef3fa;
+	}
+</style>
+```
+
+The divider is application-owned light DOM. Your Svelte components, CSS, labels, keyboard behavior, and loading indicators work normally; the viewer measures its height and includes it in the shared scrolling surface. Omitting `gap` supplies an accessible default divider. Give interactive controls a disabled state while `gap.pending` is true.
+
+| Input or action                           | Behavior                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `regions={null}` or omitted               | Full original PDF; preserves the visible source passage when leaving a region view.                                |
+| `regions={[]}`                            | No visible evidence. Render your application's empty state and full-document action alongside the renderer.        |
+| `contextPadding={24}`                     | Adds 24 PDF points above and below each input region, clamps to its page, and merges overlaps.                     |
+| `expansionStep={0.2}`                     | Reveals 20% of the neighboring source page per action, including across page boundaries.                           |
+| `regionTransitionDuration={220}`          | Expand/collapse transition duration in ms; `0` disables motion. System reduced-motion preferences also disable it. |
+| `boundingBoxes` on `PdfViewer`            | Precise highlights, independently of which regions are visible.                                                    |
+| `actions.resetRegionExpansion()`          | Restores the initial padded regions. Available through `getPdfViewerContext()` inside a `PdfViewer`.               |
+| `actions.goToPage(page)`                  | Reveals the full requested source page without leaving region mode.                                                |
+| `actions.scrollToCoordinates(page, x, y)` | Reveals a padded neighborhood around original visual-page PDF points; `y` remains bottom-origin.                   |
+| Search                                    | Searches the whole original document and reveals the selected match's passage.                                     |
+
+Changing source or region values resets expansion. Equivalent fresh arrays, including reordered inputs, preserve it. Invalid/non-finite page intervals are ignored; valid intervals are clamped to page boundaries. Regions and highlights never expose generated strip page numbers.
+
+The exported types are `PdfRegion`, `PdfFragment`, `PdfSourcePosition`, and `PdfGapContext`. A fragment describes its original source interval and contributing input `regionIds`; navigation-only context can have no contributing IDs. Gap `range.start` and `range.end` contain original `{ page, y }` positions, with `y` in top-origin percentages. `before` and `after` identify the adjacent fragments. `revealFromStart()` expands down from `before`; `revealFromEnd()` expands up from `after`. `revealAll()` reveals the entire gap. `hiddenRange` is the remaining hidden interval, or `null` when fully revealed; `range` equals that interval while hidden, falling back to `sourceRange` when fully revealed. `sourceRange` is the original gap interval, and the divider ID remains stable through expansion and collapse. `canCollapse` indicates revealed context; `collapse()` hides only context within that original gap, preserving evidence and other gaps' expansions. Fully revealed gaps retain a divider so clients can expose collapse. Search/navigation context within that interval is also removed by collapse. Actions return immediately and report completion/failure through `pending` and `error`; callbacks retained from an obsolete gap safely do nothing.
+
+Transitions begin after replacement strips are ready, keep text at its natural scale, and temporarily retain outgoing canvases as inert, nonselectable content. `pending` covers generation, not the cosmetic transition; another action safely finishes the preceding transition. Navigation, resizing, source changes, and teardown can finish transitions immediately. When collapse hides the reading position itself, the viewer anchors the nearest remaining evidence. Clients retain control over divider styling, icons, and focus behavior.
+
+`observeDocumentAnchor()` remains passive. Hidden source anchors report `null`; an anchor spanning multiple strips resolves to its first source-ordered intersection. Bounding-box callbacks and drawn boxes retain original source coordinates.
+
+### Fidelity and lifecycle
+
+Region mode lazily loads `pdf-lib` 1.17.1, reads source bytes once, and generates temporary vector strips. The existing PDF.js page renderer supplies canvas, selectable text, and package highlight layers. Original text item ordering is preserved for search; text runs intersecting a clipped boundary are removed from selection until more context is revealed. This may make a partially visible line unselectable. Cropping is **not redaction**, and downloads always contain the complete original document.
+
+**PDF annotations and forms are not supported in region mode yet.** `pdf-lib` page embedding does not retain their appearance streams or links. If a requested page has display annotations, the viewer preserves the previous usable view and shows an error with a return-to-source action, rather than silently omitting potentially important content. The full original document retains normal PDF.js annotation rendering. Scanned documents still require an existing text layer for selection; this package does not add OCR.
+
+Unchanged strips are reused, nearby strips are prepared before replacement, and the existing rendering queue handles offscreen canvases. Replaced documents, canvases, text layers, and drawing listeners are released. New source/region requests discard obsolete results. Large document performance depends on source resources and the amount revealed; revealing every page can be substantially more expensive than the initial evidence view.
+
+Run `pnpm dev` and open `/snippets` for the deterministic Event demo, including custom/default dividers, table evidence, shared citations, empty evidence, intrinsic rotation, and an offset CropBox. See [the demo assessment](src/routes/snippets/README.md) for validation and measured timings.
+
+Run `/snippets/benchmark` for reproducible 100/1,000-page text and 100-page image-source measurements. This implementation is optimized for a sparse set of evidence strips: startup reads every page's geometry and parses the full source, search extracts all source text on first use, and revealing many pages increases generated-document and retained-canvas memory. There is no LRU eviction of previously rendered fragments yet. See the assessment for timings and their limits.

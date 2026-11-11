@@ -50,7 +50,10 @@ describe('annotation image resources', () => {
 		const container = document.createElement('div');
 		document.body.appendChild(container);
 		const viewer = new PDFViewerCore({ container, imageResourcesPath: '/pdfjs/images/' });
-		await viewer.setDocument({ numPages: 1, getPage: async () => page } as PDFDocumentProxy);
+		await viewer.setDocument({
+			numPages: 1,
+			getPage: async () => page
+		} as unknown as PDFDocumentProxy);
 		try {
 			await vi.waitFor(() => {
 				expect(container.querySelector('.textAnnotation img')?.getAttribute('src')).toBe(

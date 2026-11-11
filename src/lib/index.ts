@@ -40,3 +40,11 @@ export type {
 	PdfDocumentAnchorGeometry,
 	PdfDocumentAnchorObserver
 } from './pdf-viewer/overlayAnchor.js';
+
+// Source regions and client-owned gap divider contracts.
+export type {
+	PdfRegion,
+	PdfFragment,
+	PdfSourcePosition,
+	PdfGapContext
+} from './pdf-viewer/regions.js';

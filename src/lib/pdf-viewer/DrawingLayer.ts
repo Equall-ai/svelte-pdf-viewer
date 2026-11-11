@@ -42,6 +42,7 @@ export class DrawingLayer {
 
 	private layerDiv: HTMLDivElement | null = null;
 	private isDrawing = false;
+	private detachListeners: (() => void) | null = null;
 	private startX = 0;
 	private startY = 0;
 	private currentBox: HTMLDivElement | null = null;
@@ -183,7 +184,11 @@ export class DrawingLayer {
 		document.addEventListener('mouseup', onMouseUp);
 
 		// Store event cleanup
-		this.layerDiv.dataset.hasListeners = 'true';
+		this.detachListeners = () => {
+			this.layerDiv?.removeEventListener('mousedown', onMouseDown);
+			document.removeEventListener('mousemove', onMouseMove);
+			document.removeEventListener('mouseup', onMouseUp);
+		};
 	}
 
 	/**
@@ -206,6 +211,8 @@ export class DrawingLayer {
 	 * Destroy the layer and clean up
 	 */
 	destroy(): void {
+		this.detachListeners?.();
+		this.detachListeners = null;
 		if (this.currentBox) {
 			this.currentBox.remove();
 			this.currentBox = null;

@@ -53,6 +53,9 @@ jobs:
       - name: Type check
         run: pnpm check
 
+      - name: Unit tests
+        run: pnpm test
+
   build:
     runs-on: ubuntu-latest
     steps:

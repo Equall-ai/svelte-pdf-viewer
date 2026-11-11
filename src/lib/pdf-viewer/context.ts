@@ -78,6 +78,8 @@ export interface PdfViewerState {
 }
 
 export interface PdfViewerActions {
+	/** Restore the initial padded regions without changing the source or selection. */
+	resetRegionExpansion: () => void;
 	zoomIn: () => void;
 	zoomOut: () => void;
 	setScale: (scale: number) => void;

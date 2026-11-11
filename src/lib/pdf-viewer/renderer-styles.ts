@@ -18,6 +18,9 @@
  * This is a derivative work based on PDF.js text_layer_builder.css
  */
 export const rendererStyles = `
+.pdf-region-gap { width:100%; flex:none; }
+.pdf-region-page-label { align-self:flex-start; padding:8px 0 4px; color:#536174; font:12px system-ui; user-select:none; }
+.pdfViewer { overflow-anchor:none; }
 /* CSS Custom Properties with defaults */
 .pdf-renderer-container {
 	--pdf-background-color: #e8e8e8;

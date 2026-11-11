@@ -1,4 +1,6 @@
 <script lang="ts">
+	import type { PdfRegion, PdfGapContext } from '$lib/pdf-viewer/regions.js';
+	import type { RegionViewState } from '$lib/pdf-viewer/PDFViewerCore.js';
 	import { BROWSER } from 'esm-env';
 	import { onDestroy, onMount, untrack, type Snippet } from 'svelte';
 	import { observeDocumentSurface, type PdfDocumentSurface } from './pdf-viewer/documentSurface.js';
@@ -15,6 +17,16 @@
 	import type { BoundingBox } from './pdf-viewer/BoundingBoxLayer.js';
 
 	interface Props {
+		/** Source visibility regions; null means full document, [] means no evidence. */
+		regions?: readonly PdfRegion[] | null;
+		/** Context above and below each region, in PDF points. Defaults to 24. */
+		contextPadding?: number;
+		/** Amount revealed per click, as a fraction of the adjacent page height. */
+		expansionStep?: number;
+		/** Expand/collapse animation in milliseconds; 0 disables it. Respects reduced motion. */
+		regionTransitionDuration?: number;
+		/** Application-owned divider in the shared scroller's light DOM. */
+		gap?: Snippet<[PdfGapContext]>;
 		/** Reserved margin width in CSS pixels; changes without reloading the document. */
 		marginWidth?: number;
 		/** Application-owned content in the shared scrolling margin. */
@@ -42,6 +54,11 @@
 	}
 
 	let {
+		regions = null,
+		contextPadding = 24,
+		expansionStep = 0.2,
+		regionTransitionDuration = 220,
+		gap,
 		marginWidth = 0,
 		margin,
 		surfaceOverlay,
@@ -86,7 +103,8 @@
 	let textSelectionAbortController: AbortController | null = null;
 
 	// Core instances
-	let viewer: import('./pdf-viewer/PDFViewerCore.js').PDFViewerCore | null = null;
+	let viewer = $state.raw<import('./pdf-viewer/PDFViewerCore.js').PDFViewerCore | null>(null);
+	let regionState = $state.raw<RegionViewState>({ gaps: [], pending: false, error: null });
 	let findController: import('./pdf-viewer/FindController.js').FindController | null = null;
 
 	// Presentation mode
@@ -113,6 +131,7 @@
 		viewerState.loading = true;
 		viewerState.pageDimensions = new Map();
 		viewerState.error = null;
+		regionState = { gaps: [], pending: false, error: null };
 
 		// Cleanup previous viewer
 		if (viewer) {
@@ -137,6 +156,13 @@
 
 			newViewer = new PDFViewerCore({
 				container: scrollContainerEl,
+				regions,
+				contextPadding,
+				expansionStep,
+				regionTransitionDuration,
+				onRegionsChange: (next) => {
+					if (generation === loadGeneration) regionState = next;
+				},
 				pageContainer: pageContainer ?? undefined,
 				eventBus,
 				initialScale: viewerState.scale,
@@ -313,6 +339,7 @@
 
 	// Register actions with context
 	const rendererActions: PdfViewerActions = {
+		resetRegionExpansion: () => viewer?.resetRegionExpansion(),
 		zoomIn: () => viewer?.zoomIn(),
 		zoomOut: () => viewer?.zoomOut(),
 		setScale: (scale: number) => {
@@ -470,6 +497,14 @@
 			surfaceElement.style.setProperty('--pdf-margin-width', width + 'px');
 	});
 
+	// Region changes preserve the source document, worker, search index, and consumer snippets.
+	$effect(() => {
+		if (viewer) {
+			viewer.regionTransitionDuration = regionTransitionDuration;
+			void viewer.setRegions(regions, contextPadding, expansionStep);
+		}
+	});
+
 	// Update bounding boxes when they change
 	$effect(() => {
 		if (viewer && boundingBoxes) {
@@ -505,7 +540,44 @@
 </script>
 
 <div class="pdf-renderer-wrapper">
+	{#if regionState.error}
+		<div class="pdf-region-error" role="alert">
+			{regionState.error}
+			<button onclick={() => viewer?.resetRegionExpansion()}>Retry</button>
+			<button onclick={() => void viewer?.setRegions(null)}>Return to source</button>
+		</div>
+	{/if}
 	<div bind:this={hostEl} class="pdf-renderer-host">
+		{#each regionState.gaps as context (context.id)}
+			<div use:assignSlot={context.id} class="pdf-consumer-gap" aria-busy={context.pending}>
+				{#if gap}{@render gap(context)}{:else}
+					<div class="pdf-default-gap">
+						<span
+							>{context.hiddenRange ? 'Hidden context' : 'Expanded context'} · pages {context.range
+								.start.page}–{context.range.end.page}</span
+						>
+						{#if context.hiddenRange && context.before}<button
+								disabled={context.pending}
+								onclick={context.revealFromStart}>Show more below</button
+							>{/if}
+						{#if context.hiddenRange && context.before && context.after}<button
+								disabled={context.pending}
+								onclick={context.revealAll}>Show all between</button
+							>{/if}
+						{#if context.hiddenRange && context.after}<button
+								disabled={context.pending}
+								onclick={context.revealFromEnd}>Show more above</button
+							>{/if}
+						<button
+							hidden={!context.canCollapse}
+							disabled={context.pending}
+							onclick={context.collapse}>Collapse context</button
+						>
+						{#if context.error}<span role="alert">{context.error}</span>{/if}
+					</div>
+				{/if}
+			</div>
+		{/each}
 		{#if margin && surface}
 			<div
 				use:assignSlot={'margin'}
@@ -534,6 +606,30 @@
 </div>
 
 <style>
+	.pdf-consumer-gap {
+		width: 100%;
+	}
+	.pdf-default-gap {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 12px;
+		font: 13px system-ui;
+		color: #334155;
+		background: #eef2f6;
+	}
+	.pdf-region-error {
+		position: absolute;
+		z-index: 10;
+		top: 8px;
+		left: 8px;
+		right: 8px;
+		background: #fff;
+		padding: 12px;
+		color: #9f1239;
+	}
 	.pdf-renderer-wrapper {
 		position: relative;
 		flex: 1;
