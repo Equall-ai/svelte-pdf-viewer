@@ -39,6 +39,7 @@ import {
 	drawnBoxInSource,
 	rotateRect,
 	type PdfRegion,
+	type PdfRegionRenderState,
 	type PdfFragment,
 	type PdfGapContext,
 	type RegionGap
@@ -60,6 +61,7 @@ export interface PDFViewerOptions {
 	expansionStep?: number;
 	regionTransitionDuration?: number;
 	onRegionsChange?: (state: RegionViewState) => void;
+	onRegionRenderStateChange?: (state: PdfRegionRenderState) => void;
 	container: HTMLElement;
 	/** Page mount target inside the scrolling viewport; defaults to container. */
 	pageContainer?: HTMLElement;
@@ -111,6 +113,7 @@ export class PDFViewerCore {
 	private fragments: PdfFragment[] = [];
 	private regionGenerator: Promise<RegionPdfSource> | null = null;
 	private onRegionsChange?: (state: RegionViewState) => void;
+	private onRegionRenderStateChange?: (state: PdfRegionRenderState) => void;
 	private regionPending = false;
 	private regionError: string | null = null;
 	private gapResize: ResizeObserver | null = null;
@@ -154,6 +157,7 @@ export class PDFViewerCore {
 		this.expansionStep = options.expansionStep ?? 0.2;
 		this.regionTransitionDuration = options.regionTransitionDuration ?? 220;
 		this.onRegionsChange = options.onRegionsChange;
+		this.onRegionRenderStateChange = options.onRegionRenderStateChange;
 		this.eventBus = options.eventBus ?? new EventBus();
 		this.currentScale = options.initialScale ?? DEFAULT_SCALE;
 		this.currentRotation = options.initialRotation ?? 0;
@@ -403,14 +407,24 @@ export class PDFViewerCore {
 
 				const page = this.pages[pageIndex];
 				if (page && page.renderingState === RenderingStates.INITIAL) {
+					const regionVersion = this.regionVersion;
 					try {
 						await page.draw();
-						if (page.renderError && this.pages.includes(page) && this.regionInput !== null) {
+						if (
+							regionVersion === this.regionVersion &&
+							page.renderError &&
+							this.pages.includes(page) &&
+							this.regionInput !== null
+						) {
 							this.regionError = page.renderError.message;
 							this.publishRegions();
 						}
 					} catch (error) {
-						if (this.regionInput !== null) {
+						if (
+							regionVersion === this.regionVersion &&
+							this.pages.includes(page) &&
+							this.regionInput !== null
+						) {
 							this.regionError =
 								error instanceof Error ? error.message : 'Could not render this passage.';
 							this.publishRegions();
@@ -619,7 +633,13 @@ export class PDFViewerCore {
 		this.regionKey = key;
 		this.regionInput = regions == null ? null : regions.map((r) => ({ ...r }));
 		this.contextPadding = padding;
-		if (!this.pdfDocument) return;
+		if (!this.pdfDocument) {
+			this.onRegionRenderStateChange?.({
+				status: this.regionInput === null ? 'idle' : 'loading',
+				error: null
+			});
+			return;
+		}
 		if (this.regionInput === null) {
 			this.finishTransition?.();
 			this.regionVersion++;
@@ -641,6 +661,7 @@ export class PDFViewerCore {
 			this.publishRegions();
 			this.refreshLayout();
 			this.restoreSourcePosition(position);
+			this.onRegionRenderStateChange?.({ status: 'idle', error: null });
 			return;
 		}
 		await this.replaceFragments(initialFragments(this.regionInput, this.pageSizes, padding), false);
@@ -675,6 +696,8 @@ export class PDFViewerCore {
 				);
 	}
 	private publishRegions(): void {
+		if (this.regionError)
+			this.onRegionRenderStateChange?.({ status: 'error', error: this.regionError });
 		const version = this.regionVersion;
 		this.onRegionsChange?.({
 			pending: this.regionPending,
@@ -731,6 +754,7 @@ export class PDFViewerCore {
 		let position = preservePosition ? this.captureSourcePosition() : null;
 		this.regionPending = true;
 		this.regionError = null;
+		this.onRegionRenderStateChange?.({ status: 'loading', error: null });
 		this.publishRegions();
 		const created: RegionPart[] = [],
 			next: RegionPart[] = [];
@@ -953,7 +977,7 @@ export class PDFViewerCore {
 			for (const node of nodes)
 				if (node.classList.contains('pdf-region-gap')) this.gapResize.observe(node);
 			this.eventBus.dispatch('regionlayoutchanged', {});
-			return true;
+			return await this.finishRegionRendering(version, isCurrent);
 		} catch (error) {
 			if (version === this.regionVersion && isCurrent()) {
 				this.regionError =
@@ -966,12 +990,47 @@ export class PDFViewerCore {
 			if (version === this.regionVersion && !isCurrent()) {
 				this.regionPending = false;
 				this.publishRegions();
+				// A cancelled search keeps its previous usable region view.
+				await this.finishRegionRendering(version);
 			}
 			staging.remove();
 			this.disposeParts(
 				created.filter((p) => !this.regionParts.some((active) => active.view === p.view))
 			);
 		}
+	}
+	/** Wait for the current viewport only; rendering offscreen strips remains lazy. */
+	private async finishRegionRendering(
+		version: number,
+		isCurrent: () => boolean = () => true
+	): Promise<boolean> {
+		try {
+			while (version === this.regionVersion && isCurrent() && this.regionInput !== null) {
+				const layout = this.layoutVersion;
+				this.rebuildPageOffsets();
+				const visible = this.getVisiblePages();
+				const pages = this.pages.slice(visible.first, visible.last + 1);
+				await Promise.all(pages.map((page) => page.draw()));
+				if (version !== this.regionVersion || !isCurrent()) return false;
+				if (layout !== this.layoutVersion) continue;
+				const error = pages.find((page) => page.renderError)?.renderError;
+				if (error) throw error;
+				if (pages.some((page) => page.renderingState !== RenderingStates.FINISHED))
+					throw new Error('Could not render this passage.');
+				this.rebuildPageOffsets();
+				const current = this.getVisiblePages();
+				if (current.first !== visible.first || current.last !== visible.last) continue;
+				this.onRegionRenderStateChange?.({ status: 'ready', error: null });
+				return true;
+			}
+		} catch (error) {
+			if (version === this.regionVersion && isCurrent()) {
+				this.regionError =
+					error instanceof Error ? error.message : 'Could not render this passage.';
+				this.publishRegions();
+			}
+		}
+		return false;
 	}
 	private captureSourcePosition(): SourceReadingPosition | null {
 		const top = this.container.getBoundingClientRect().top + this.container.clientTop;

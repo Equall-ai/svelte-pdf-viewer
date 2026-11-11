@@ -678,3 +678,27 @@ Unchanged strips are reused, nearby strips are prepared before replacement, and 
 Run `pnpm dev` and open `/snippets` for the deterministic Event demo, including custom/default dividers, table evidence, shared citations, empty evidence, intrinsic rotation, and an offset CropBox. See [the demo assessment](src/routes/snippets/README.md) for validation and measured timings.
 
 Run `/snippets/benchmark` for reproducible 100/1,000-page text and 100-page image-source measurements. This implementation is optimized for a sparse set of evidence strips: startup reads every page's geometry and parses the full source, search extracts all source text on first use, and revealing many pages increases generated-document and retained-canvas memory. There is no LRU eviction of previously rendered fragments yet. See the assessment for timings and their limits.
+
+### Region render readiness
+
+`PdfRenderer` accepts `onRegionRenderStateChange(state: PdfRegionRenderState)`.
+Use it to drive application-owned placeholders or shimmers while switching evidence:
+
+```svelte
+<script lang="ts">
+	import { PdfRenderer, type PdfRegionRenderState } from '@equall-ai/svelte-pdf-viewer';
+	let rendering = $state<PdfRegionRenderState>({ status: 'idle', error: null });
+</script>
+
+<PdfRenderer {regions} onRegionRenderStateChange={(state) => (rendering = state)} />
+{#if rendering.status === 'loading'}
+	<div role="status">Preparing evidence…</div>
+{/if}
+```
+
+- `loading`: a region selection, expansion, collapse, reset, or hidden-range reveal is being prepared.
+- `ready`: the current region layout is mounted, its source reading position restored, and its visible canvas, text, annotation, and highlight layers have finished rendering. Empty regions also become ready. Offscreen strips remain lazily rendered; this is not a promise that every strip has rendered or that an expand/collapse animation has finished.
+- `error`: generation or rendering failed; `error` contains the message. The viewer's existing error and return-to-source controls remain available.
+- `idle`: full-document mode. `error` is null outside the error state.
+
+Equivalent replacement region arrays do not start a new cycle. Obsolete requests cannot emit ready for a newer selection or source. Cancelled hidden-range reveals settle back to the retained visible view. Ordinary scrolling does not start a new region request. `gap.pending` still describes divider actions; it is not a rendering-readiness signal.

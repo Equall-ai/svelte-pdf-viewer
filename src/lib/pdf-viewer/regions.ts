@@ -19,6 +19,10 @@ export interface PdfSourcePosition {
 	page: number;
 	y: number;
 }
+/** Readiness of the current region request, independent of offscreen lazy rendering. */
+export type PdfRegionRenderState =
+	| { status: 'idle' | 'loading' | 'ready'; error: null }
+	| { status: 'error'; error: string };
 /** Client-owned gap content receives source geometry and safe asynchronous actions. */
 export interface PdfGapContext {
 	id: string;
