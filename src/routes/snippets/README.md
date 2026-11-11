@@ -23,3 +23,29 @@ Visible text runs are selectable; runs crossing a strip boundary are excluded as
 - Warm sample strip generation: approximately 1.2–1.7 ms per strip; PDF.js loading/render preparation: approximately 14.8 ms per strip. These are small-fixture observations, not a large-document benchmark. Strip elements expose `data-generation-ms` and `data-render-ms` for inspection.
 
 This change does not integrate Equall or publish the package. After review, merge, and publication, integration will use a worktree based on `codex/event-citation-groups`.
+
+## Expand/collapse transitions and large PDFs
+
+The package now provides `regionTransitionDuration` (220 ms by default, 0 to disable, with system reduced motion respected). Custom and default dividers retain independent collapse actions after all context is revealed. The demo's **Animate context** toggle compares both behaviors. A collapse preserves the original evidence and expansions in other gaps. If it removes the passage currently being read, navigation falls back to the nearest surviving evidence. Outgoing canvases remain briefly for animation but are inert and cannot contribute selectable text or anchor geometry.
+
+Open `/snippets/benchmark` and choose **Run benchmark** to reproduce the measurements below. These are one local browser run on November 11, 2026, with synthetic sources generated in memory, two evidence strips, device-pixel ratio 2, and animation disabled. Network transfer and fixture generation are excluded. PDF.js worker/font caches warm across samples; these are observations, not latency guarantees.
+
+| Source                             |     Size | PDF.js open | Initial region setup | Warm expansion | Collapse |
+| ---------------------------------- | -------: | ----------: | -------------------: | -------------: | -------: |
+| 100 text pages                     | 0.096 MB |       96 ms |                85 ms |          35 ms |    34 ms |
+| 1,000 text pages                   |  0.96 MB |       37 ms |               246 ms |          34 ms |    33 ms |
+| 100 pages with unique JPEGs + text | 23.26 MB |        4 ms |               123 ms |          51 ms |    50 ms |
+
+Initial setup includes reading all source page geometries, loading/parsing with pdf-lib, generating the two strips, and nearby PDF.js render preparation. Warm expansion/collapse includes the layout-frame wait and reused source parser/page cache. The image fixture uses unique deterministic noise JPEGs with a text layer; it is not a representative scanned legal document. A 16 ms timer's largest observed excess delay was 1.5–2.9 ms; this coarse signal is not a full responsiveness profile.
+
+Two live strip canvases used approximately 2.45 MB of RGBA pixel storage after each operation. **That is not total memory:** it excludes original source bytes, both PDF object models, decoded images/fonts, text layers, worker memory, and the briefly overlapping old/new canvases during animation.
+
+Sparse evidence looks practical in these samples. Large-document costs that remain:
+
+- Startup loads every source page's geometry and pdf-lib parses the complete source; region mode cannot retain PDF.js's range-loading-only behavior.
+- First search extracts text across the entire source.
+- “Show all between” across hundreds of pages generates all requested strips before replacing the view; canvas painting is queued, but strip generation itself is not virtualized.
+- Visited page normalization and rendered fragment canvases remain cached until replaced or the source/viewer is destroyed. There is no LRU memory budget yet. Extensive browsing/revealing can therefore grow memory.
+- Image resolution, embedded fonts, and complex vector pages matter as much as page count. Production adoption for very large files should add a cache budget and lazy strip generation, then benchmark representative documents on lower-powered devices.
+
+Transition regression coverage includes independent collapse, restored contributing region IDs, nearest surviving anchors, reduced-motion duration, interrupted-animation cleanup, and destruction while a replacement frame is suspended.

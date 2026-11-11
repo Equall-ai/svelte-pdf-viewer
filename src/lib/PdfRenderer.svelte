@@ -23,6 +23,8 @@
 		contextPadding?: number;
 		/** Amount revealed per click, as a fraction of the adjacent page height. */
 		expansionStep?: number;
+		/** Expand/collapse animation in milliseconds; 0 disables it. Respects reduced motion. */
+		regionTransitionDuration?: number;
 		/** Application-owned divider in the shared scroller's light DOM. */
 		gap?: Snippet<[PdfGapContext]>;
 		/** Reserved margin width in CSS pixels; changes without reloading the document. */
@@ -55,6 +57,7 @@
 		regions = null,
 		contextPadding = 24,
 		expansionStep = 0.2,
+		regionTransitionDuration = 220,
 		gap,
 		marginWidth = 0,
 		margin,
@@ -156,6 +159,7 @@
 				regions,
 				contextPadding,
 				expansionStep,
+				regionTransitionDuration,
 				onRegionsChange: (next) => {
 					if (generation === loadGeneration) regionState = next;
 				},
@@ -495,7 +499,10 @@
 
 	// Region changes preserve the source document, worker, search index, and consumer snippets.
 	$effect(() => {
-		if (viewer) void viewer.setRegions(regions, contextPadding, expansionStep);
+		if (viewer) {
+			viewer.regionTransitionDuration = regionTransitionDuration;
+			void viewer.setRegions(regions, contextPadding, expansionStep);
+		}
 	});
 
 	// Update bounding boxes when they change
@@ -545,17 +552,27 @@
 			<div use:assignSlot={context.id} class="pdf-consumer-gap" aria-busy={context.pending}>
 				{#if gap}{@render gap(context)}{:else}
 					<div class="pdf-default-gap">
-						<span>Hidden context · pages {context.range.start.page}–{context.range.end.page}</span>
-						{#if context.before}<button disabled={context.pending} onclick={context.revealFromStart}
-								>Show more below</button
+						<span
+							>{context.hiddenRange ? 'Hidden context' : 'Expanded context'} · pages {context.range
+								.start.page}–{context.range.end.page}</span
+						>
+						{#if context.hiddenRange && context.before}<button
+								disabled={context.pending}
+								onclick={context.revealFromStart}>Show more below</button
 							>{/if}
-						{#if context.before && context.after}<button
+						{#if context.hiddenRange && context.before && context.after}<button
 								disabled={context.pending}
 								onclick={context.revealAll}>Show all between</button
 							>{/if}
-						{#if context.after}<button disabled={context.pending} onclick={context.revealFromEnd}
-								>Show more above</button
+						{#if context.hiddenRange && context.after}<button
+								disabled={context.pending}
+								onclick={context.revealFromEnd}>Show more above</button
 							>{/if}
+						<button
+							hidden={!context.canCollapse}
+							disabled={context.pending}
+							onclick={context.collapse}>Collapse context</button
+						>
 						{#if context.error}<span role="alert">{context.error}</span>{/if}
 					</div>
 				{/if}

@@ -443,7 +443,7 @@ it('preserves a usable view after expansion failure and can retry without reload
 	stripFailure = false;
 	state.gaps[0].revealFromEnd();
 	await vi.waitFor(() => expect(viewer.getPageView(0)).not.toBe(oldView));
-	expect(stripDocuments[0].destroyed).toBe(true);
+	await vi.waitFor(() => expect(stripDocuments[0].destroyed).toBe(true));
 	const expanded = viewer.getPageView(0);
 	await viewer.setRegions([{ id: 'a', page: 1, y_min: 20, y_max: 30 }]);
 	expect(viewer.getPageView(0)).toBe(expanded);
@@ -524,4 +524,70 @@ it('applies toolbar rotation to a strip prepared during an in-flight render', as
 	await loading;
 	expect(viewer.getPageView(0)?.div.dataset.viewerRotation).toBe('90');
 	viewer.destroy();
+});
+
+it('retains a custom collapse action after show-all and ignores retired divider actions', async () => {
+	stripFailure = false;
+	stripGate = null;
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	let state: import('./PDFViewerCore.js').RegionViewState = {
+		gaps: [],
+		pending: false,
+		error: null
+	};
+	const viewer = new PDFViewerCore({
+		container: makeContainer(),
+		contextPadding: 0,
+		regions: [
+			{ id: 'a', page: 1, y_min: 20, y_max: 30 },
+			{ id: 'b', page: 1, y_min: 70, y_max: 80 }
+		],
+		onRegionsChange: (next) => (state = next)
+	});
+	await viewer.setDocument(await regionSource());
+	const id = state.gaps[1].id;
+	state.gaps[1].revealAll();
+	await vi.waitFor(() => expect(state.gaps.find((g) => g.id === id)?.canCollapse).toBe(true));
+	expect(viewer.getPageViews(0)).toHaveLength(1);
+	const stale = state.gaps.find((g) => g.id === id)!;
+	expect(stale.hiddenRange).toBeNull();
+	stale.collapse();
+	await vi.waitFor(() => expect(viewer.getPageViews(0)).toHaveLength(2));
+	expect(state.gaps.find((g) => g.id === id)?.canCollapse).toBe(false);
+	stale.revealAll();
+	expect(viewer.getPageViews(0)).toHaveLength(2);
+	viewer.destroy();
+});
+
+it('releases outgoing documents on destroy even while a replacement frame is suspended', async () => {
+	stripFailure = false;
+	stripGate = null;
+	stripDocuments.length = 0;
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	let state: import('./PDFViewerCore.js').RegionViewState = {
+		gaps: [],
+		pending: false,
+		error: null
+	};
+	const viewer = new PDFViewerCore({
+		container: makeContainer(),
+		regions: [{ id: 'a', page: 1, y_min: 20, y_max: 30 }],
+		onRegionsChange: (next) => (state = next)
+	});
+	await viewer.setDocument(await regionSource());
+	const callbacks: FrameRequestCallback[] = [];
+	const raf = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((cb) => {
+		callbacks.push(cb);
+		return 1;
+	});
+	try {
+		state.gaps[0].revealFromEnd();
+		await vi.waitFor(() => expect(stripDocuments.length).toBe(2));
+		await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
+		viewer.destroy();
+		expect(stripDocuments.every((d) => d.destroyed)).toBe(true);
+	} finally {
+		raf.mockRestore();
+		for (const callback of callbacks) callback(0);
+	}
 });

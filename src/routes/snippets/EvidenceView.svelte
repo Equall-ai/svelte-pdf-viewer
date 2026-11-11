@@ -10,6 +10,7 @@
 	let query = $state('');
 	let spacious = $state(false);
 	let defaultDividers = $state(false);
+	let motion = $state(true);
 </script>
 
 <div class="toolbar">
@@ -52,6 +53,7 @@
 </form>
 <div class="options">
 	<label><input type="checkbox" bind:checked={spacious} /> Taller dividers</label>
+	<label><input type="checkbox" bind:checked={motion} /> Animate context</label>
 	<label><input type="checkbox" bind:checked={defaultDividers} /> Default dividers</label>
 	<button onclick={() => actions.goToPage(4)}>Go to page 4</button>
 	<button onclick={() => void actions.download()}>Download source</button>
@@ -65,24 +67,32 @@
 <PdfRenderer
 	{regions}
 	contextPadding={24}
+	regionTransitionDuration={motion ? 220 : 0}
 	expansionStep={0.2}
 	backgroundColor="#edf0f4"
 	gap={defaultDividers ? undefined : divider}
 />
 {#snippet divider(gap: import('$lib/index.js').PdfGapContext)}
 	<div class="divider" class:spacious aria-busy={gap.pending}>
-		<span class="range">··· Hidden context · pages {gap.range.start.page}–{gap.range.end.page}</span
+		<span class="range"
+			>··· {gap.hiddenRange ? 'Hidden context' : 'Expanded context'} · pages {gap.range.start
+				.page}–{gap.range.end.page}</span
 		>
 		<div class="gap-actions">
-			{#if gap.before}<button disabled={gap.pending} onclick={gap.revealFromStart}
-					>↓ Show more below</button
+			{#if gap.hiddenRange && gap.before}<button
+					disabled={gap.pending}
+					onclick={gap.revealFromStart}>↓ Show more below</button
 				>{/if}
-			{#if gap.before && gap.after}<button disabled={gap.pending} onclick={gap.revealAll}
-					>Show all between</button
+			{#if gap.hiddenRange && gap.before && gap.after}<button
+					disabled={gap.pending}
+					onclick={gap.revealAll}>Show all between</button
 				>{/if}
-			{#if gap.after}<button disabled={gap.pending} onclick={gap.revealFromEnd}
+			{#if gap.hiddenRange && gap.after}<button disabled={gap.pending} onclick={gap.revealFromEnd}
 					>↑ Show more above</button
 				>{/if}
+			<button hidden={!gap.canCollapse} disabled={gap.pending} onclick={gap.collapse}
+				>Collapse context</button
+			>
 		</div>
 		{#if gap.error}<p role="alert">{gap.error}</p>{/if}
 	</div>

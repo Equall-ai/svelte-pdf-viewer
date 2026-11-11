@@ -96,3 +96,55 @@ describe('source regions', () => {
 		expect(mergeFragments([fragment, fragment], pages)).toHaveLength(1);
 	});
 });
+
+it('keeps a fully revealed divider collapsible without hiding other expansions or evidence', async () => {
+	const { regionDividers, collapseRegionGap } = await import('$lib/pdf-viewer/regions.js');
+	const initial = initialFragments([region('a', 1, 90, 95), region('b', 3, 10, 20)], pages, 0);
+	const base = regionGaps(initial, pages);
+	const expanded = expandRegionGap(
+		expandRegionGap(initial, base[1], 'all', pages, 0.2),
+		base[2],
+		'start',
+		pages,
+		0.2
+	);
+	const dividers = regionDividers(initial, expanded, pages);
+	expect(dividers[1]).toMatchObject({ id: base[1].id, hiddenRange: null, canCollapse: true });
+	const collapsed = collapseRegionGap(expanded, base[1], pages, initial);
+	expect(collapsed.map((f) => f.region)).toEqual([
+		{ page: 1, y_min: 90, y_max: 95 },
+		{ page: 3, y_min: 10, y_max: 40 }
+	]);
+	expect(regionDividers(initial, collapsed, pages)[1].canCollapse).toBe(false);
+});
+
+it('restores contributing IDs after splitting merged evidence during collapse', async () => {
+	const { collapseRegionGap } = await import('$lib/pdf-viewer/regions.js');
+	const initial = initialFragments([region('a', 1, 10, 20), region('b', 1, 40, 50)], pages, 0);
+	const gap = regionGaps(initial, pages)[1];
+	const expanded = expandRegionGap(initial, gap, 'all', pages, 0.2);
+	expect(collapseRegionGap(expanded, gap, pages, initial).map((f) => f.regionIds)).toEqual([
+		['a'],
+		['b']
+	]);
+});
+it('chooses the nearest retained passage when collapse hides the reading anchor', async () => {
+	const { nearestFragmentPosition } = await import('$lib/pdf-viewer/regions.js');
+	const fragments = initialFragments([region('a', 1, 10, 20), region('b', 3, 40, 50)], pages, 0);
+	expect(nearestFragmentPosition(fragments, { page: 2, y: 80 })).toMatchObject({
+		position: { page: 3, y: 40 }
+	});
+	expect(nearestFragmentPosition(fragments, { page: 1, y: 15 })).toMatchObject({
+		position: { page: 1, y: 15 }
+	});
+});
+
+it('keeps outer divider orientation after revealing all leading or trailing context', async () => {
+	const { regionDividers } = await import('$lib/pdf-viewer/regions.js');
+	const initial = initialFragments([region('a', 1, 20, 30)], pages, 0),
+		gaps = regionGaps(initial, pages);
+	const leading = expandRegionGap(initial, gaps[0], 'all', pages, 0.2);
+	expect(regionDividers(initial, leading, pages)[0].before).toBeNull();
+	const trailing = expandRegionGap(initial, gaps[1], 'all', pages, 0.2);
+	expect(regionDividers(initial, trailing, pages)[1].after).toBeNull();
+});

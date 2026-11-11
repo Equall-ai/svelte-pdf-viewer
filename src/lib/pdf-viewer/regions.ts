@@ -25,6 +25,12 @@ export interface PdfGapContext {
 	range: { start: PdfSourcePosition; end: PdfSourcePosition };
 	before: PdfFragment | null;
 	after: PdfFragment | null;
+	/** Remaining hidden range; null when this divider is fully revealed. */
+	hiddenRange: PdfGapContext['range'] | null;
+	/** Original context interval controlled by this divider. */
+	sourceRange: PdfGapContext['range'];
+	canCollapse: boolean;
+	collapse(): void;
 	pending: boolean;
 	error: string | null;
 	revealFromStart(): void;
@@ -225,4 +231,111 @@ export function drawnBoxInSource(
 		y_min: source.y_min + (r.y_min / 100) * (source.y_max - source.y_min),
 		y_max: source.y_min + (r.y_max / 100) * (source.y_max - source.y_min)
 	};
+}
+
+/** Keep one stable control per initial gap, even after fragments join. */
+export function regionDividers(
+	initial: readonly PdfFragment[],
+	current: readonly PdfFragment[],
+	pages: readonly PageDimensions[]
+) {
+	const hidden = regionGaps(current, pages);
+	return regionGaps(initial, pages).map((base) => {
+		const start = distance(base.range.start, pages),
+			end = distance(base.range.end, pages);
+		const remaining = hidden.filter(
+			(g) =>
+				distance(g.range.start, pages) < end - 0.001 && distance(g.range.end, pages) > start + 0.001
+		);
+		const first = remaining[0],
+			last = remaining.at(-1);
+		const hiddenRange = first && last ? { start: first.range.start, end: last.range.end } : null;
+		const before = first
+			? first.before
+			: !base.before
+				? null
+				: (current.find(
+						(f) =>
+							f.region.page === base.range.start.page &&
+							f.region.y_min <= base.range.start.y &&
+							f.region.y_max >= base.range.start.y
+					) ?? null);
+		const after = last
+			? last.after
+			: !base.after
+				? null
+				: (current.find(
+						(f) =>
+							f.region.page === base.range.end.page &&
+							f.region.y_min <= base.range.end.y &&
+							f.region.y_max >= base.range.end.y
+					) ?? null);
+		const canCollapse = current.some(
+			(f) =>
+				distance({ page: f.region.page, y: f.region.y_max }, pages) > start + 0.001 &&
+				distance({ page: f.region.page, y: f.region.y_min }, pages) < end - 0.001
+		);
+		return {
+			...base,
+			range: hiddenRange ?? base.range,
+			sourceRange: base.range,
+			hiddenRange,
+			before,
+			after,
+			canCollapse
+		};
+	});
+}
+/** Remove only context within an initial gap; preserve all other revealed passages. */
+export function collapseRegionGap(
+	current: readonly PdfFragment[],
+	gap: RegionGap,
+	pages: readonly PageDimensions[],
+	initial: readonly PdfFragment[]
+): PdfFragment[] {
+	return mergeFragments(
+		current.flatMap((f) => {
+			const r = f.region,
+				start = gap.range.start,
+				end = gap.range.end;
+			if (r.page < start.page || r.page > end.page) return [f];
+			const top = r.page === start.page ? start.y : 0;
+			const bottom = r.page === end.page ? end.y : 100;
+			if (r.y_max <= top || r.y_min >= bottom) return [f];
+			return [
+				fragment({ ...r, y_max: Math.min(r.y_max, top) }, f.regionIds),
+				fragment({ ...r, y_min: Math.max(r.y_min, bottom) }, f.regionIds)
+			];
+		}),
+		pages
+	).map((f) => ({
+		...f,
+		regionIds: [
+			...new Set(
+				initial
+					.filter(
+						(base) =>
+							base.region.page === f.region.page &&
+							base.region.y_min < f.region.y_max &&
+							base.region.y_max > f.region.y_min
+					)
+					.flatMap((base) => base.regionIds)
+			)
+		].sort()
+	}));
+}
+
+/** Clamp a removed reading position to the closest surviving source passage. */
+export function nearestFragmentPosition(
+	fragments: readonly PdfFragment[],
+	position: PdfSourcePosition
+) {
+	return fragments
+		.map((fragment) => {
+			const r = fragment.region,
+				y = clamp((position.page - r.page) * 100 + position.y, r.y_min, r.y_max);
+			const delta = Math.abs((r.page - position.page) * 100 + y - position.y);
+			return { fragment, position: { page: r.page, y }, delta };
+		})
+		.sort((a, b) => a.delta - b.delta)[0];
 }

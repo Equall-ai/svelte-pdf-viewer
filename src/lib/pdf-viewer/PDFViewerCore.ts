@@ -31,7 +31,9 @@ import {
 	initialFragments,
 	mergeFragments,
 	regionInputKey,
-	regionGaps,
+	regionDividers,
+	collapseRegionGap,
+	nearestFragmentPosition,
 	expandRegionGap,
 	boxInFragment,
 	drawnBoxInSource,
@@ -42,6 +44,7 @@ import {
 	type RegionGap
 } from '$lib/pdf-viewer/regions.js';
 import { getPdfJs, getPdfWorker } from '$lib/pdf-viewer/pdfjs-singleton.js';
+import { animateRegionChange, type RegionSnapshot } from '$lib/pdf-viewer/regionTransition.js';
 import type { RegionPdfSource } from '$lib/pdf-viewer/regionPdf.js';
 type RegionPart = { fragment: PdfFragment; view: PDFPageView; document: PDFDocumentProxy };
 type SourceReadingPosition = { page: number; x: number; y: number; screenY: number };
@@ -55,6 +58,7 @@ export interface PDFViewerOptions {
 	regions?: readonly PdfRegion[] | null;
 	contextPadding?: number;
 	expansionStep?: number;
+	regionTransitionDuration?: number;
 	onRegionsChange?: (state: RegionViewState) => void;
 	container: HTMLElement;
 	/** Page mount target inside the scrolling viewport; defaults to container. */
@@ -98,6 +102,10 @@ export class PDFViewerCore {
 	private contextPadding = 24;
 	private expansionStep = 0.2;
 	private regionVersion = 0;
+	regionTransitionDuration = 220;
+	private transitionActive = false;
+	private transitionViewport = { width: 0, height: 0 };
+	private finishTransition: (() => void) | null = null;
 	private layoutVersion = 0;
 	private regionParts: RegionPart[] = [];
 	private fragments: PdfFragment[] = [];
@@ -144,6 +152,7 @@ export class PDFViewerCore {
 		this.regionKey = regionInputKey(this.regionInput);
 		this.contextPadding = options.contextPadding ?? 24;
 		this.expansionStep = options.expansionStep ?? 0.2;
+		this.regionTransitionDuration = options.regionTransitionDuration ?? 220;
 		this.onRegionsChange = options.onRegionsChange;
 		this.eventBus = options.eventBus ?? new EventBus();
 		this.currentScale = options.initialScale ?? DEFAULT_SCALE;
@@ -161,6 +170,7 @@ export class PDFViewerCore {
 		// Create viewer div inside container
 		this.viewer = document.createElement('div');
 		this.viewer.className = 'pdfViewer';
+		this.viewer.style.position = 'relative';
 		(options.pageContainer ?? this.container).appendChild(this.viewer);
 
 		// Create link service for annotation navigation
@@ -185,7 +195,7 @@ export class PDFViewerCore {
 					rafId = requestAnimationFrame(() => {
 						rafId = null;
 						this.updateVisiblePages();
-						this.lastReadingPosition = this.captureSourcePosition();
+						if (!this.transitionActive) this.lastReadingPosition = this.captureSourcePosition();
 					});
 				}
 			},
@@ -287,6 +297,13 @@ export class PDFViewerCore {
 
 	/** Refresh page visibility after the containing surface changes size. */
 	refreshLayout(): void {
+		if (
+			this.transitionActive &&
+			this.transitionViewport.width === this.container.clientWidth &&
+			this.transitionViewport.height === this.container.clientHeight
+		)
+			return;
+		this.finishTransition?.();
 		this.rebuildPageOffsets();
 		this.updateVisiblePages();
 	}
@@ -415,6 +432,7 @@ export class PDFViewerCore {
 		const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
 		if (newScale === this.currentScale) return;
 
+		this.finishTransition?.();
 		const position = this.readingPosition();
 		this.currentScale = newScale;
 		this.layoutVersion++;
@@ -439,6 +457,7 @@ export class PDFViewerCore {
 		if (newRotation === this.currentRotation) return;
 
 		const position = this.readingPosition();
+		this.finishTransition?.();
 		this.currentRotation = newRotation;
 		this.layoutVersion++;
 
@@ -602,6 +621,7 @@ export class PDFViewerCore {
 		this.contextPadding = padding;
 		if (!this.pdfDocument) return;
 		if (this.regionInput === null) {
+			this.finishTransition?.();
 			this.regionVersion++;
 			this.regionPending = false;
 			this.regionError = null;
@@ -645,18 +665,44 @@ export class PDFViewerCore {
 			return [mapped];
 		});
 	}
+	private dividers() {
+		return this.regionInput === null
+			? []
+			: regionDividers(
+					initialFragments(this.regionInput, this.pageSizes, this.contextPadding),
+					this.fragments,
+					this.pageSizes
+				);
+	}
 	private publishRegions(): void {
 		const version = this.regionVersion;
 		this.onRegionsChange?.({
 			pending: this.regionPending,
 			error: this.regionError,
-			gaps: regionGaps(this.fragments, this.pageSizes).map((g) => ({
+			gaps: this.dividers().map((g) => ({
 				...g,
 				pending: this.regionPending,
 				error: this.regionError,
-				revealFromStart: () => this.expand(g, 'start', version),
-				revealFromEnd: () => this.expand(g, 'end', version),
-				revealAll: () => this.expand(g, 'all', version)
+				collapse: () => {
+					if (version !== this.regionVersion || this.regionPending || !g.canCollapse) return;
+					void this.replaceFragments(
+						collapseRegionGap(
+							this.fragments,
+							{ ...g, range: g.sourceRange },
+							this.pageSizes,
+							initialFragments(this.regionInput!, this.pageSizes, this.contextPadding)
+						)
+					);
+				},
+				revealFromStart: () => {
+					if (g.hiddenRange) this.expand(g, 'start', version);
+				},
+				revealFromEnd: () => {
+					if (g.hiddenRange) this.expand(g, 'end', version);
+				},
+				revealAll: () => {
+					if (g.hiddenRange) this.expand(g, 'all', version);
+				}
 			}))
 		});
 	}
@@ -677,6 +723,8 @@ export class PDFViewerCore {
 		preservePosition = true,
 		isCurrent: () => boolean = () => true
 	): Promise<boolean> {
+		this.finishTransition?.();
+		this.finishTransition = null;
 		const version = ++this.regionVersion,
 			original = this.pdfDocument;
 		if (!original) return false;
@@ -793,43 +841,105 @@ export class PDFViewerCore {
 			position = preservePosition ? this.captureSourcePosition() : null;
 			this.gapResize?.disconnect();
 			const retained = new Set(next.map((p) => p.view));
-			this.disposeParts(this.regionParts.filter((p) => !retained.has(p.view)));
+			const before: RegionSnapshot[] = this.regionParts.map((p) => ({
+				fragment: p.fragment,
+				element: p.view.div,
+				rect: p.view.div.getBoundingClientRect()
+			}));
+			const retired = this.regionParts.filter((p) => !retained.has(p.view));
+			let released = false;
+			const retire = () => {
+				if (released) return;
+				released = true;
+				this.transitionActive = false;
+				this.disposeParts(retired);
+			};
+			// Own outgoing resources before yielding to a potentially suspended animation frame.
+			this.finishTransition = retire;
+			const gapRects = new Map(
+				Array.from(this.viewer.querySelectorAll<HTMLElement>('.pdf-region-gap')).map((el) => [
+					el.dataset.gapId!,
+					el.getBoundingClientRect()
+				])
+			);
 			for (const page of this.sourcePages) page.reset();
 			this.regionParts = next;
 			this.fragments = fragments;
 			this.pages = next.map((p) => p.view);
-			const gaps = regionGaps(fragments, this.pageSizes),
+			const gaps = this.dividers(),
 				nodes: HTMLElement[] = [];
 			const addGap = (g: RegionGap) => {
 				const wrapper = document.createElement('div');
 				wrapper.className = 'pdf-region-gap';
+				wrapper.dataset.gapId = g.id;
 				const slot = document.createElement('slot');
 				slot.name = g.id;
 				wrapper.append(slot);
 				nodes.push(wrapper);
 			};
 			for (const part of next) {
-				const before = gaps.find((g) => g.after?.id === part.fragment.id);
-				if (before) addGap(before);
+				for (const gap of gaps.filter(
+					(g) => g.after?.id === part.fragment.id && g.before?.id !== part.fragment.id
+				))
+					addGap(gap);
 				const label = document.createElement('div');
 				label.className = 'pdf-region-page-label';
 				label.textContent = 'Page ' + part.fragment.region.page;
 				nodes.push(label, part.view.div);
+				for (const gap of gaps.filter(
+					(g) => g.before?.id === part.fragment.id && (!g.after || g.after.id === part.fragment.id)
+				))
+					addGap(gap);
 			}
-			const last = gaps.find((g) => !g.after);
-			if (last) addGap(last);
+
 			this.viewer.style.paddingBottom = '';
 			this.viewer.replaceChildren(...nodes);
 			this.regionPending = false;
 			this.publishRegions();
 			// Let Svelte mount/update the light DOM gap content before restoring the source anchor.
 			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-			if (version !== this.regionVersion || !isCurrent()) return false;
-			this.refreshLayout();
+			if (version !== this.regionVersion || !isCurrent()) {
+				retire();
+				return false;
+			}
+			this.rebuildPageOffsets();
+			this.updateVisiblePages();
 			this.restoreSourcePosition(position);
 			if (!preservePosition) this.container.scrollTop = 0;
 			this.lastReadingPosition = this.captureSourcePosition();
-			this.gapResize = new ResizeObserver(() => {
+			this.transitionActive = true;
+			this.transitionViewport = {
+				width: this.container.clientWidth,
+				height: this.container.clientHeight
+			};
+			this.finishTransition = animateRegionChange(
+				this.viewer,
+				before,
+				next.map((p) => ({
+					fragment: p.fragment,
+					element: p.view.div,
+					rect: p.view.div.getBoundingClientRect()
+				})),
+				retired.map((p) => p.view.div),
+				preservePosition ? this.regionTransitionDuration : 0,
+				this.currentRotation,
+				retire,
+				gapRects
+			);
+			const gapHeights = new Map(
+				nodes.filter((n) => n.classList.contains('pdf-region-gap')).map((n) => [n, n.offsetHeight])
+			);
+			this.gapResize = new ResizeObserver((entries) => {
+				if (
+					!entries.some(
+						(e) =>
+							gapHeights.get(e.target as HTMLElement) !== (e.target as HTMLElement).offsetHeight
+					)
+				)
+					return;
+				for (const entry of entries)
+					gapHeights.set(entry.target as HTMLElement, (entry.target as HTMLElement).offsetHeight);
+				this.finishTransition?.();
 				this.restoreSourcePosition(this.lastReadingPosition);
 				this.refreshLayout();
 				this.container.dispatchEvent(new Event('pdf-layout-change'));
@@ -877,14 +987,22 @@ export class PDFViewerCore {
 			: { ...point, ...rotateRect(point, -this.currentRotation) };
 		return { page: view.id, x: source.x_min, y: source.y_min, screenY };
 	}
-	private restoreSourcePosition(position: SourceReadingPosition | null): void {
-		if (!position) return;
-		const part = this.regionParts.find(
+	private restoreSourcePosition(inputPosition: SourceReadingPosition | null): void {
+		if (!inputPosition) return;
+		let position = inputPosition;
+		let part = this.regionParts.find(
 			(p) =>
 				p.fragment.region.page === position.page &&
 				p.fragment.region.y_min <= position.y + 1e-8 &&
 				p.fragment.region.y_max >= position.y - 1e-8
 		);
+		if (!part && this.regionParts.length) {
+			const nearest = nearestFragmentPosition(this.fragments, position);
+			if (nearest) {
+				part = this.regionParts.find((p) => p.fragment.id === nearest.fragment.id);
+				position = { ...position, ...nearest.position };
+			}
+		}
 		const view = part?.view ?? this.pages.find((p) => p.id === position.page);
 		if (!view) return;
 		const r = part?.fragment.region ?? { y_min: 0, y_max: 100 };
@@ -918,6 +1036,7 @@ export class PDFViewerCore {
 			!(await this.replaceFragments(mergeFragments([...this.fragments, ...full], this.pageSizes)))
 		)
 			return;
+		this.finishTransition?.();
 		const view = this.getPageViews(page - 1)[0];
 		if (view) {
 			this.container.scrollTop = this.pageTop(view);
@@ -973,6 +1092,7 @@ export class PDFViewerCore {
 			}
 		}
 		if (!isCurrent()) return;
+		this.finishTransition?.();
 		const part = this.regionParts.find(
 			(p) =>
 				p.fragment.region.page === page &&
@@ -1001,6 +1121,8 @@ export class PDFViewerCore {
 	}
 
 	cleanup(): void {
+		this.finishTransition?.();
+		this.finishTransition = null;
 		this.documentGeneration++;
 		this.regionVersion++;
 		this.gapResize?.disconnect();
