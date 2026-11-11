@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PdfRegion, PdfGapContext } from '$lib/pdf-viewer/regions.js';
+	import type { PdfRegion, PdfGapContext, PdfRegionRenderState } from '$lib/pdf-viewer/regions.js';
 	import type { RegionViewState } from '$lib/pdf-viewer/PDFViewerCore.js';
 	import { BROWSER } from 'esm-env';
 	import { onDestroy, onMount, untrack, type Snippet } from 'svelte';
@@ -27,6 +27,8 @@
 		regionTransitionDuration?: number;
 		/** Application-owned divider in the shared scroller's light DOM. */
 		gap?: Snippet<[PdfGapContext]>;
+		/** Reports region loading, visible-layer readiness after layout, errors, or full-document idle. */
+		onRegionRenderStateChange?: (state: PdfRegionRenderState) => void;
 		/** Reserved margin width in CSS pixels; changes without reloading the document. */
 		marginWidth?: number;
 		/** Application-owned content in the shared scrolling margin. */
@@ -59,6 +61,7 @@
 		expansionStep = 0.2,
 		regionTransitionDuration = 220,
 		gap,
+		onRegionRenderStateChange,
 		marginWidth = 0,
 		margin,
 		surfaceOverlay,
@@ -132,6 +135,9 @@
 		viewerState.pageDimensions = new Map();
 		viewerState.error = null;
 		regionState = { gaps: [], pending: false, error: null };
+		untrack(() =>
+			onRegionRenderStateChange?.({ status: regions == null ? 'idle' : 'loading', error: null })
+		);
 
 		// Cleanup previous viewer
 		if (viewer) {
@@ -160,6 +166,9 @@
 				contextPadding,
 				expansionStep,
 				regionTransitionDuration,
+				onRegionRenderStateChange: (next) => {
+					if (generation === loadGeneration) untrack(() => onRegionRenderStateChange?.(next));
+				},
 				onRegionsChange: (next) => {
 					if (generation === loadGeneration) regionState = next;
 				},
@@ -296,6 +305,8 @@
 
 			const errorMessage = e instanceof Error ? e.message : 'Failed to load PDF';
 			viewerState.error = errorMessage;
+			if (regions != null)
+				untrack(() => onRegionRenderStateChange?.({ status: 'error', error: errorMessage }));
 			viewerState.loading = false;
 			// Call the error callback if provided
 			context._onerror?.(errorMessage);

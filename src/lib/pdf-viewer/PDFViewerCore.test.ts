@@ -617,3 +617,224 @@ it('does not leave rendering paused when layout cancels a region transition befo
 		viewer.destroy();
 	}
 });
+
+// Readiness is observable only after current visible layers and source layout settle.
+describe('region render readiness', () => {
+	beforeEach(() => {
+		stripFailure = false;
+		stripGate = null;
+		stripDocuments.length = 0;
+	});
+
+	it('keeps loading through strip generation and the layout frame', async () => {
+		const { PDFViewerCore } = await import('./PDFViewerCore.js');
+		const states: string[] = [];
+		let release!: () => void;
+		stripGate = new Promise<void>((resolve) => (release = resolve));
+		const viewer = new PDFViewerCore({
+			container: makeContainer(),
+			regions: [{ id: 'a', page: 1, y_min: 20, y_max: 30 }],
+			onRegionRenderStateChange: (state) => states.push(state.status)
+		});
+		const loading = viewer.setDocument(await regionSource());
+		await vi.waitFor(() => expect(stripDocuments).toHaveLength(1));
+		expect(states.at(-1)).toBe('loading');
+		let frame!: FrameRequestCallback;
+		const raf = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((fn) => {
+			frame = fn;
+			return 1;
+		});
+		release();
+		await vi.waitFor(() => expect(frame).toBeDefined());
+		expect(states.at(-1)).toBe('loading');
+		raf.mockRestore();
+		frame(performance.now());
+		await loading;
+		expect(states.at(-1)).toBe('ready');
+		expect(viewer.getPageView(0)?.renderingState).toBe(RenderingStates.FINISHED);
+		viewer.destroy();
+	});
+
+	it('does not await offscreen strips to report ready', async () => {
+		const { PDFViewerCore } = await import('./PDFViewerCore.js');
+		const states: string[] = [];
+		const container = makeContainer();
+		vi.spyOn(container, 'clientHeight', 'get').mockReturnValue(200);
+		let release!: () => void;
+		const offscreen = new Promise<void>((resolve) => (release = resolve));
+		const viewer = new PDFViewerCore({
+			container,
+			regions: [
+				{ id: 'a', page: 1, y_min: 20, y_max: 30 },
+				{ id: 'b', page: 2, y_min: 20, y_max: 30 }
+			],
+			onRegionRenderStateChange: (state) => states.push(state.status),
+			onRegionsChange: (state) => {
+				if (state.pending || !viewer.getPageView(1)) return;
+				const second = viewer.getPageView(1)!;
+				vi.spyOn(second.div, 'getBoundingClientRect').mockReturnValue(
+					new DOMRect(0, 1000, 600, 792)
+				);
+				vi.spyOn(second, 'draw').mockImplementation(async () => {
+					await offscreen;
+				});
+			}
+		});
+		const loading = viewer.setDocument(await regionSource());
+		await vi.waitFor(() => expect(states.at(-1)).toBe('ready'));
+		expect(viewer.getPageView(0)?.renderingState).toBe(RenderingStates.FINISHED);
+		expect(viewer.getPageView(1)?.renderingState).not.toBe(RenderingStates.FINISHED);
+		release();
+		await loading;
+		viewer.destroy();
+	});
+
+	it('reports empty regions as ready and full document as idle', async () => {
+		const { PDFViewerCore } = await import('./PDFViewerCore.js');
+		const states: string[] = [];
+		const viewer = new PDFViewerCore({
+			container: makeContainer(),
+			regions: [],
+			onRegionRenderStateChange: (state) => states.push(state.status)
+		});
+		await viewer.setDocument(await regionSource());
+		expect(states.at(-1)).toBe('ready');
+		await viewer.setRegions(null);
+		expect(states.at(-1)).toBe('idle');
+		viewer.destroy();
+	});
+
+	it('reports failures and clears them after retry', async () => {
+		const { PDFViewerCore } = await import('./PDFViewerCore.js');
+		const states: Array<{ status: string; error: string | null }> = [];
+		const viewer = new PDFViewerCore({
+			container: makeContainer(),
+			regions: [{ id: 'a', page: 1, y_min: 20, y_max: 30 }],
+			onRegionRenderStateChange: (state) => states.push(state)
+		});
+		stripFailure = true;
+		await viewer.setDocument(await regionSource());
+		expect(states.at(-1)).toEqual({ status: 'error', error: 'fixture strip load failure' });
+		stripFailure = false;
+		viewer.resetRegionExpansion();
+		await vi.waitFor(() => expect(states.at(-1)).toEqual({ status: 'ready', error: null }));
+		viewer.destroy();
+	});
+
+	it('discards stale ready notifications after regions change or full-document exit', async () => {
+		const { PDFViewerCore } = await import('./PDFViewerCore.js');
+		const states: string[] = [];
+		let release!: () => void;
+		stripGate = new Promise<void>((resolve) => (release = resolve));
+		const viewer = new PDFViewerCore({
+			container: makeContainer(),
+			regions: [{ id: 'old', page: 1, y_min: 20, y_max: 30 }],
+			onRegionRenderStateChange: (state) => states.push(state.status)
+		});
+		const loading = viewer.setDocument(await regionSource());
+		await vi.waitFor(() => expect(stripDocuments).toHaveLength(1));
+		await viewer.setRegions([]);
+		expect(states.at(-1)).toBe('ready');
+		await viewer.setRegions(null);
+		const before = [...states];
+		release();
+		await loading;
+		expect(states).toEqual(before);
+		expect(states.at(-1)).toBe('idle');
+		viewer.destroy();
+	});
+});
+
+it('clears readiness loading when a hidden search is cancelled', async () => {
+	stripFailure = false;
+	stripGate = null;
+	stripDocuments.length = 0;
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	const states: string[] = [];
+	const viewer = new PDFViewerCore({
+		container: makeContainer(),
+		regions: [{ id: 'a', page: 1, y_min: 20, y_max: 30 }],
+		onRegionRenderStateChange: (state) => states.push(state.status)
+	});
+	await viewer.setDocument(await regionSource());
+	let release!: () => void;
+	let current = true;
+	stripGate = new Promise<void>((resolve) => (release = resolve));
+	const search = viewer.revealSourceRange(2, 10, 20, 50, 'instant', () => current);
+	await vi.waitFor(() => expect(stripDocuments).toHaveLength(2));
+	expect(states.at(-1)).toBe('loading');
+	current = false;
+	release();
+	await search;
+	stripGate = null;
+	expect(states.at(-1)).toBe('ready');
+	expect(viewer.getPageViews(1)).toEqual([]);
+	viewer.destroy();
+});
+
+it('ignores a retired queued render failure while a new region request is loading', async () => {
+	stripFailure = false;
+	stripGate = null;
+	stripDocuments.length = 0;
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	const states: string[] = [];
+	const viewer = new PDFViewerCore({
+		container: makeContainer(),
+		regions: [{ id: 'a', page: 1, y_min: 20, y_max: 30 }],
+		onRegionRenderStateChange: (state) => states.push(state.status)
+	});
+	await viewer.setDocument(await regionSource());
+	const core = viewer as unknown as QueueCore;
+	await vi.waitFor(() => expect(core.isRendering).toBe(false));
+	const oldPage = viewer.getPageView(0)!;
+	let fail!: () => void;
+	const renderGate = new Promise<void>((resolve) => (fail = resolve));
+	oldPage.renderingState = RenderingStates.INITIAL;
+	vi.spyOn(oldPage, 'draw').mockImplementation(async () => {
+		await renderGate;
+		Object.assign(oldPage, { renderError: new Error('retired render error') });
+	});
+	core.renderingQueue.add(0);
+	const render = core.processRenderingQueue();
+	let release!: () => void;
+	stripGate = new Promise<void>((resolve) => (release = resolve));
+	const change = viewer.setRegions([{ id: 'b', page: 2, y_min: 20, y_max: 30 }]);
+	await vi.waitFor(() => expect(stripDocuments).toHaveLength(2));
+	fail();
+	await render;
+	expect(states.at(-1)).toBe('loading');
+	release();
+	await change;
+	stripGate = null;
+	expect(states.at(-1)).toBe('ready');
+	viewer.destroy();
+});
+
+it('reports retained-view render failure after cancellation and still disposes staging', async () => {
+	stripFailure = false;
+	stripGate = null;
+	stripDocuments.length = 0;
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	const states: Array<{ status: string; error: string | null }> = [];
+	const viewer = new PDFViewerCore({
+		container: makeContainer(),
+		regions: [{ id: 'a', page: 1, y_min: 20, y_max: 30 }],
+		onRegionRenderStateChange: (state) => states.push(state)
+	});
+	await viewer.setDocument(await regionSource());
+	let release!: () => void;
+	let current = true;
+	stripGate = new Promise<void>((resolve) => (release = resolve));
+	const search = viewer.revealSourceRange(2, 10, 20, 50, 'instant', () => current);
+	await vi.waitFor(() => expect(stripDocuments).toHaveLength(2));
+	const retained = viewer.getPageView(0)!;
+	Object.assign(retained, { renderError: new Error('retained render failure') });
+	current = false;
+	release();
+	await expect(search).resolves.toBeUndefined();
+	stripGate = null;
+	expect(states.at(-1)).toEqual({ status: 'error', error: 'retained render failure' });
+	expect(viewer.viewer.querySelector('[data-region-staging]')).toBeNull();
+	expect(stripDocuments[1].destroyed).toBe(true);
+	viewer.destroy();
+});

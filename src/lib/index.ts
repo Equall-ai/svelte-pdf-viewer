@@ -46,5 +46,6 @@ export type {
 	PdfRegion,
 	PdfFragment,
 	PdfSourcePosition,
-	PdfGapContext
+	PdfGapContext,
+	PdfRegionRenderState
 } from './pdf-viewer/regions.js';
