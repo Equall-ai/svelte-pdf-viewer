@@ -591,3 +591,29 @@ it('releases outgoing documents on destroy even while a replacement frame is sus
 		for (const callback of callbacks) callback(0);
 	}
 });
+
+it('does not leave rendering paused when layout cancels a region transition before its frame', async () => {
+	stripFailure = false;
+	stripGate = null;
+	const { PDFViewerCore } = await import('./PDFViewerCore.js');
+	const viewer = new PDFViewerCore({ container: makeContainer() });
+	await viewer.setDocument(await regionSource());
+	const callbacks: FrameRequestCallback[] = [];
+	const raf = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((cb) => {
+		callbacks.push(cb);
+		return 1;
+	});
+	try {
+		const pending = viewer.setRegions([{ id: 'a', page: 1, y_min: 20, y_max: 30 }]);
+		await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
+		viewer.refreshLayout();
+		for (const callback of callbacks.splice(0)) callback(0);
+		await pending;
+		expect((viewer as unknown as { transitionActive: boolean }).transitionActive).toBe(false);
+		await viewer.setRegions(null);
+		expect((viewer as unknown as { transitionActive: boolean }).transitionActive).toBe(false);
+	} finally {
+		raf.mockRestore();
+		viewer.destroy();
+	}
+});

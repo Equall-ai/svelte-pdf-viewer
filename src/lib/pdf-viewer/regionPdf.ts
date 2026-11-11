@@ -1,6 +1,6 @@
 // Lazily normalize original pages and embed vector strips, retaining original text offsets.
 import { PDFDocument } from 'pdf-lib';
-import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist/legacy/build/pdf.mjs';
 type TextContent = Awaited<
 	ReturnType<import('pdfjs-dist/legacy/build/pdf.mjs').PDFPageProxy['getTextContent']>
 >;
@@ -14,10 +14,68 @@ const multiply = (a: Matrix, b: number[]): Matrix => [
 	a[0] * b[4] + a[2] * b[5] + a[4],
 	a[1] * b[4] + a[3] * b[5] + a[5]
 ];
+/** Keep native annotation/form appearances on the original page, cropped into a normalized strip. */
+export interface RegionAppearance {
+	page: PDFPageProxy;
+	viewport: (target: PageViewport) => PageViewport;
+	transform: (target: PageViewport) => Matrix;
+	includes: (rect: number[]) => boolean;
+}
+function inverse(m: number[]): Matrix {
+	const det = m[0] * m[3] - m[1] * m[2];
+	return [
+		m[3] / det,
+		-m[1] / det,
+		-m[2] / det,
+		m[0] / det,
+		(m[2] * m[5] - m[3] * m[4]) / det,
+		(m[1] * m[4] - m[0] * m[5]) / det
+	];
+}
+function appearance(
+	page: PDFPageProxy,
+	mapping: Matrix,
+	width: number,
+	height: number
+): RegionAppearance {
+	const viewport = (target: PageViewport) =>
+		page.getViewport({ scale: target.scale, rotation: (page.rotate + target.rotation) % 360 });
+	return {
+		page,
+		viewport,
+		transform: (target) =>
+			multiply(multiply(target.transform as Matrix, mapping), inverse(viewport(target).transform)),
+		includes: (rect) => {
+			const points = [
+				[rect[0], rect[1]],
+				[rect[0], rect[3]],
+				[rect[2], rect[1]],
+				[rect[2], rect[3]]
+			].map(([x, y]) => [
+				mapping[0] * x + mapping[2] * y + mapping[4],
+				mapping[1] * x + mapping[3] * y + mapping[5]
+			]);
+			const xs = points.map((p) => p[0]),
+				ys = points.map((p) => p[1]);
+			return (
+				Math.max(...xs) >= 0 &&
+				Math.min(...xs) <= width &&
+				Math.max(...ys) >= 0 &&
+				Math.min(...ys) <= height
+			);
+		}
+	};
+}
 export class RegionPdfSource {
 	private normalized = new Map<
 		number,
-		Promise<{ pdf: PDFDocument; width: number; height: number; transform: Matrix }>
+		Promise<{
+			pdf: PDFDocument;
+			width: number;
+			height: number;
+			transform: Matrix;
+			annotated?: PDFPageProxy;
+		}>
 	>();
 	private constructor(
 		private original: PDFDocumentProxy,
@@ -32,12 +90,6 @@ export class RegionPdfSource {
 		const pending = (async () => {
 			const original = await this.original.getPage(pageNumber);
 			const annotations = await original.getAnnotations({ intent: 'display' });
-			if (annotations.length)
-				throw new Error(
-					'Region view does not yet support PDF annotations or forms on page ' +
-						pageNumber +
-						'. Open the full document to view this page.'
-				);
 			const viewport = original.getViewport({ scale: 1 });
 			const [a, b, c, d, e, f] = viewport.transform;
 			const transform: Matrix = [a, -b, c, -d, e, viewport.height - f];
@@ -45,7 +97,7 @@ export class RegionPdfSource {
 			const pdf = await PDFDocument.create();
 			const page = pdf.addPage([viewport.width, viewport.height]);
 			// Empty pages have no Contents stream; preserve their dimensions without embedding.
-			if (this.input.getPage(pageNumber - 1).node.Contents()) {
+			if (!annotations.length && this.input.getPage(pageNumber - 1).node.Contents()) {
 				const embedded = await pdf.embedPage(
 					this.input.getPage(pageNumber - 1),
 					{ left, bottom, right, top },
@@ -54,15 +106,24 @@ export class RegionPdfSource {
 				page.drawPage(embedded);
 				await pdf.flush();
 			}
-			return { pdf, width: viewport.width, height: viewport.height, transform };
+			return {
+				pdf,
+				width: viewport.width,
+				height: viewport.height,
+				transform,
+				annotated: annotations.length ? original : undefined
+			};
 		})();
 		this.normalized.set(pageNumber, pending);
 		void pending.catch(() => this.normalized.delete(pageNumber));
 		return pending;
 	}
-	async generate(
-		fragment: PdfFragment
-	): Promise<{ bytes: Uint8Array; textContent: () => Promise<TextContent>; generationMs: number }> {
+	async generate(fragment: PdfFragment): Promise<{
+		bytes: Uint8Array;
+		textContent: () => Promise<TextContent>;
+		generationMs: number;
+		appearance?: RegionAppearance;
+	}> {
 		const started = performance.now();
 		const r = fragment.region,
 			source = await this.normalize(r.page);
@@ -80,9 +141,14 @@ export class RegionPdfSource {
 			page.drawPage(embedded);
 		}
 		const bytes = await output.save();
+		const mapping: Matrix = [...source.transform];
+		mapping[5] -= bottom;
 		return {
 			bytes,
 			generationMs: performance.now() - started,
+			appearance: source.annotated
+				? appearance(source.annotated, mapping, source.width, top - bottom)
+				: undefined,
 			textContent: async () => {
 				const original = await this.original.getPage(r.page);
 				const text = await original.getTextContent();
