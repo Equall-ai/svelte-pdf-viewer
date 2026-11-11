@@ -1,4 +1,5 @@
 // Observe PDF anchors and place consumer-owned overlays outside the renderer's shadow DOM.
+import { anchorInFragment, rotateRect } from '$lib/pdf-viewer/regions.js';
 import type { NormalizedBoundingBox } from './BoundingBoxLayer.js';
 
 /** A rectangle in the rendered page's orientation (percentages, top-left origin), or a box ID. */
@@ -135,6 +136,7 @@ function observeAnchorGeometry(
 	let probe: HTMLDivElement | null = null;
 	let observed: HTMLElement | null = null;
 	let last = '';
+	let probeStyle = '';
 	const schedule = () => {
 		if (!stopped && !frame) frame = requestAnimationFrame(measure);
 	};
@@ -150,7 +152,7 @@ function observeAnchorGeometry(
 		if ('boxId' in anchor) {
 			return (
 				[...root.querySelectorAll<HTMLElement>('[data-box-id]')].find(
-					(box) => box.dataset.boxId === anchor.boxId
+					(box) => box.dataset.boxId === anchor.boxId && !box.closest('[data-region-staging]')
 				) ?? null
 			);
 		}
@@ -160,7 +162,33 @@ function observeAnchorGeometry(
 			![anchor.x_min, anchor.x_max, anchor.y_min, anchor.y_max].every(Number.isFinite)
 		)
 			return null;
-		const page = root.querySelector<HTMLElement>(`[data-page-number="${anchor.page}"]`);
+		let mapped = { ...anchor };
+		const page = [
+			...root.querySelectorAll<HTMLElement>(`[data-page-number="${anchor.page}"]`)
+		].find((candidate) => {
+			if (candidate.closest('[data-region-staging]')) return false;
+			const rotation = Number(candidate.dataset.viewerRotation ?? 0);
+			if (candidate.dataset.sourceMin === undefined) {
+				mapped = { ...anchor, ...rotateRect(anchor, rotation) };
+				return true;
+			}
+			const rect = anchorInFragment(
+				anchor,
+				{
+					id: '',
+					region: {
+						page: anchor.page,
+						y_min: Number(candidate.dataset.sourceMin),
+						y_max: Number(candidate.dataset.sourceMax)
+					},
+					regionIds: []
+				},
+				rotation
+			);
+			if (!rect) return false;
+			mapped = { page: anchor.page, ...rect };
+			return true;
+		});
 		if (!page) {
 			probe?.remove();
 			probe = null;
@@ -169,15 +197,20 @@ function observeAnchorGeometry(
 		if (!probe || probe.parentElement !== page) {
 			probe?.remove();
 			probe = document.createElement('div');
+			probeStyle = '';
 			probe.setAttribute('data-pdf-anchor-probe', '');
 			probe.setAttribute('aria-hidden', 'true');
 			// A non-interactive rectangle inherits the same page transforms as rendered content.
 			// Measuring it handles CSS rotations/scaling without duplicating PDF.js geometry.
-			probe.style.cssText =
-				`position:absolute;pointer-events:none;visibility:hidden;` +
-				`left:${Math.min(anchor.x_min, anchor.x_max)}%;top:${Math.min(anchor.y_min, anchor.y_max)}%;` +
-				`width:${Math.abs(anchor.x_max - anchor.x_min)}%;height:${Math.abs(anchor.y_max - anchor.y_min)}%;`;
 			page.append(probe);
+		}
+		const style =
+			`position:absolute;pointer-events:none;visibility:hidden;` +
+			`left:${Math.min(mapped.x_min, mapped.x_max)}%;top:${Math.min(mapped.y_min, mapped.y_max)}%;` +
+			`width:${Math.abs(mapped.x_max - mapped.x_min)}%;height:${Math.abs(mapped.y_max - mapped.y_min)}%;`;
+		if (probeStyle !== style) {
+			probe.style.cssText = style;
+			probeStyle = style;
 		}
 		return probe;
 	}

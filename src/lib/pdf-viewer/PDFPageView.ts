@@ -18,6 +18,9 @@
  * This is a derivative work based on PDF.js pdf_page_view.js
  */
 import type { PDFPageProxy, PageViewport, TextLayer } from 'pdfjs-dist/legacy/build/pdf.mjs';
+type TextContent = Awaited<
+	ReturnType<import('pdfjs-dist/legacy/build/pdf.mjs').PDFPageProxy['getTextContent']>
+>;
 import type { EventBus } from './EventBus.js';
 import { AnnotationLayerBuilder } from './AnnotationLayerBuilder.js';
 import type { SimpleLinkService } from './SimpleLinkService.js';
@@ -36,6 +39,8 @@ async function ensurePdfJsLoaded() {
 }
 
 export interface PDFPageViewOptions {
+	sourceTextContent?: () => Promise<TextContent>;
+	clipText?: boolean;
 	container: HTMLElement;
 	id: number;
 	defaultViewport: PageViewport;
@@ -99,12 +104,16 @@ export class PDFPageView {
 	private onBoundingBoxClick?: (box: BoundingBox) => void;
 	private onBoundingBoxHover?: (box: BoundingBox | null) => void;
 
+	public renderError: Error | null = null;
 	public renderingState: RenderingState = RenderingStates.INITIAL;
+	private renderGeneration = 0;
 	private renderTask: ReturnType<PDFPageProxy['render']> | null = null;
 
 	// Text layer instance for updates
 	private textLayer: TextLayer | null = null;
 	private textLayerRendered = false;
+	private sourceTextContent?: () => Promise<TextContent>;
+	private clipText = false;
 
 	// Text layer data for search
 	public textDivs: HTMLElement[] = [];
@@ -112,6 +121,8 @@ export class PDFPageView {
 
 	constructor(options: PDFPageViewOptions) {
 		this.id = options.id;
+		this.sourceTextContent = options.sourceTextContent;
+		this.clipText = options.clipText ?? false;
 		this.container = options.container;
 		this.eventBus = options.eventBus;
 		this.scale = options.scale ?? 1.0;
@@ -154,13 +165,15 @@ export class PDFPageView {
 		// Set rotation attribute for text layer
 		const totalRotation = (this.rotation + this.pdfPageRotate) % 360;
 		this.div.setAttribute('data-main-rotation', String(totalRotation));
+		this.div.dataset.viewerRotation = String(this.rotation);
 
 		// Update text layer dimensions if it exists
 		// mustFlip=false because the text layer uses raw page coordinates
 		// and rotation is handled via CSS transforms
 		if (this.textLayerDiv) {
 			await ensurePdfJsLoaded();
-			setLayerDimensions(this.textLayerDiv, this.viewport, /* mustFlip */ false);
+			if (this.textLayerDiv)
+				setLayerDimensions(this.textLayerDiv, this.viewport, /* mustFlip */ false);
 		}
 	}
 
@@ -179,9 +192,15 @@ export class PDFPageView {
 			rotation: totalRotation
 		});
 		this.setDimensions();
+		this.drawingLayer?.update(this.viewport);
 	}
 
 	update({ scale, rotation }: { scale?: number; rotation?: number }): void {
+		if (
+			(scale === undefined || scale === this.scale) &&
+			(rotation === undefined || rotation === this.rotation)
+		)
+			return;
 		if (scale !== undefined) {
 			this.scale = scale;
 		}
@@ -189,6 +208,12 @@ export class PDFPageView {
 			this.rotation = rotation;
 		}
 		this.updateViewport();
+
+		if (this.clipText && this.renderingState === RenderingStates.FINISHED) {
+			this.reset();
+			void this.draw();
+			return;
+		}
 
 		// Re-render if already rendered
 		if (this.renderingState === RenderingStates.FINISHED) {
@@ -253,6 +278,7 @@ export class PDFPageView {
 			this.textLayerDiv.remove();
 			this.textLayerDiv = null;
 		}
+		this.textLayer?.cancel();
 		this.textLayer = null;
 		this.textLayerRendered = false;
 		this.textDivs = [];
@@ -278,11 +304,23 @@ export class PDFPageView {
 		}
 	}
 
-	async draw(): Promise<void> {
+	private drawing: Promise<void> | null = null;
+	draw(): Promise<void> {
+		if (this.drawing) return this.drawing;
+		const pending = this.drawPage();
+		this.drawing = pending;
+		void pending.finally(() => {
+			if (this.drawing === pending) this.drawing = null;
+		});
+		return pending;
+	}
+	private async drawPage(): Promise<void> {
 		if (!this.pdfPage || this.renderingState !== RenderingStates.INITIAL) {
 			return;
 		}
 
+		const generation = this.renderGeneration;
+		this.renderError = null;
 		this.renderingState = RenderingStates.RUNNING;
 
 		try {
@@ -319,6 +357,7 @@ export class PDFPageView {
 			});
 
 			await this.renderTask.promise;
+			if (generation !== this.renderGeneration) return;
 			this.renderTask = null;
 
 			// Render text layer, annotation layer, and bounding boxes in parallel
@@ -333,6 +372,7 @@ export class PDFPageView {
 			}
 
 			await Promise.all(layerPromises);
+			if (generation !== this.renderGeneration) return;
 
 			// Bounding box layer and drawing layer are synchronous
 			if (!this.boundingBoxLayerRendered) {
@@ -348,16 +388,21 @@ export class PDFPageView {
 				source: this
 			});
 		} catch (error) {
-			if ((error as Error).name === 'RenderingCancelledException') {
+			if (
+				generation !== this.renderGeneration ||
+				(error as Error).name === 'RenderingCancelledException'
+			) {
 				return;
 			}
 			this.renderingState = RenderingStates.INITIAL;
+			this.renderError = error instanceof Error ? error : new Error(String(error));
 			console.error('Error rendering page:', error);
 		}
 	}
 
 	private async renderTextLayer(): Promise<void> {
 		if (!this.pdfPage) return;
+		const generation = this.renderGeneration;
 
 		// If text layer already rendered, just update it
 		if (this.textLayerRendered && this.textLayer && this.textLayerDiv) {
@@ -380,12 +425,12 @@ export class PDFPageView {
 			]);
 
 			// Check if reset() was called during the await
-			if (!this.textLayerDiv || !this.pdfPage) return;
+			if (generation !== this.renderGeneration || !this.textLayerDiv || !this.pdfPage) return;
 
-			const textContent = await this.pdfPage.getTextContent();
+			const textContent = await (this.sourceTextContent?.() ?? this.pdfPage.getTextContent());
 
 			// Check again after await - reset() may have been called
-			if (!this.textLayerDiv) return;
+			if (generation !== this.renderGeneration || !this.textLayerDiv) return;
 
 			this.textDivs = [];
 			this.textContentItemsStr = [];
@@ -418,11 +463,27 @@ export class PDFPageView {
 				this.textContentItemsStr.push(span.textContent || '');
 			});
 
+			if (this.clipText) {
+				const bounds = this.div.getBoundingClientRect();
+				// Preserve detached entries in the arrays: search offsets still index original source text.
+				for (const span of this.textDivs) {
+					const r = span.getBoundingClientRect();
+					if (
+						r.top < bounds.top - 1 ||
+						r.bottom > bounds.bottom + 1 ||
+						r.left < bounds.left - 1 ||
+						r.right > bounds.right + 1
+					)
+						span.remove();
+				}
+			}
 			this.eventBus.dispatch('textlayerrendered', {
 				pageNumber: this.id,
 				source: this
 			});
 		} catch (error) {
+			if (generation !== this.renderGeneration) return;
+			if (this.clipText) throw error;
 			console.error('Error rendering text layer:', error);
 		}
 	}
@@ -499,6 +560,8 @@ export class PDFPageView {
 	}
 
 	cancelRendering(): void {
+		this.renderGeneration++;
+		this.drawing = null;
 		if (this.renderTask) {
 			this.renderTask.cancel();
 			this.renderTask = null;

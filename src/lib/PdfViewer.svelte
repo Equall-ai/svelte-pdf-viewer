@@ -150,6 +150,7 @@
 
 	// Actions that proxy to the renderer
 	const actions: PdfViewerActions = {
+		resetRegionExpansion: () => rendererActions?.resetRegionExpansion(),
 		zoomIn: () => rendererActions?.zoomIn(),
 		zoomOut: () => rendererActions?.zoomOut(),
 		setScale: (scale: number) => rendererActions?.setScale(scale),

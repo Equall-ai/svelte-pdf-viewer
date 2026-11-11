@@ -62,6 +62,7 @@
 	let pageHeights: number[] = $state([]);
 
 	// Track which pages are visible via IntersectionObserver
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- Rendering caches are intentionally non-reactive.
 	let visiblePages: Set<number> = new Set();
 	let renderedPages: Set<number> = $state(new Set());
 
@@ -71,7 +72,9 @@
 	let canvasEls: (HTMLCanvasElement | undefined)[] = $state([]);
 
 	// Render state
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- Rendering caches are intentionally non-reactive.
 	let bbLayers: Map<number, BoundingBoxLayer> = new Map();
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- Rendering caches are intentionally non-reactive.
 	let renderTasks: Map<number, import('pdfjs-dist/legacy/build/pdf.mjs').RenderTask> = new Map();
 	let observer: IntersectionObserver | null = null;
 	let loadGeneration = 0;
@@ -197,6 +200,7 @@
 			if (idx > maxVisible) maxVisible = idx;
 		}
 
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- Rendering caches are intentionally non-reactive.
 		const newRendered = new Set<number>();
 		if (minVisible <= maxVisible) {
 			const lo = Math.max(0, minVisible - overscan);
@@ -258,7 +262,7 @@
 		if (!ctx) return;
 		ctx.scale(outputScale, outputScale);
 
-		const renderTask = page.render({ canvasContext: ctx, viewport });
+		const renderTask = page.render({ canvas, canvasContext: ctx, viewport });
 		renderTasks.set(pageNum, renderTask);
 
 		renderTask.promise
@@ -359,7 +363,7 @@
 
 	// Re-render bounding boxes on visible pages when they change
 	$effect(() => {
-		const _boxes = boundingBoxes;
+		void boundingBoxes;
 		if (displayPages.length > 0) {
 			for (const idx of renderedPages) {
 				const entry = displayPages[idx];
@@ -377,7 +381,7 @@
 
 	// Re-render visible pages when rotation changes
 	$effect(() => {
-		const _rot = rotation;
+		void rotation;
 		if (displayPages.length > 0) {
 			// Update estimated heights
 			const heights: number[] = [];
@@ -407,7 +411,7 @@
 	style:grid-template-columns="repeat({columns}, auto)"
 	style:gap="{gap}px"
 >
-	{#each displayPages as entry, i}
+	{#each displayPages as entry, i (entry.pageNum)}
 		<button
 			class={buttonClass}
 			type="button"

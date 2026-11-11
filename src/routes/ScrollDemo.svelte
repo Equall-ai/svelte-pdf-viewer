@@ -19,7 +19,7 @@
 
 <div class="scroll-demo">
 	<strong>Scroll to Box:</strong>
-	{#each boundingBoxes as box, i}
+	{#each boundingBoxes as box, i (box.id ?? i)}
 		<button onclick={() => scrollToBox(box)} class="scroll-btn">
 			Box {i + 1}
 		</button>

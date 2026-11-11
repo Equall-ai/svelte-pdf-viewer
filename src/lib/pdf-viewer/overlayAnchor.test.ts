@@ -194,3 +194,27 @@ it('retains document coordinates offscreen and separates scrolling from layout r
 	await new Promise((resolve) => setTimeout(resolve, 40));
 	expect(changed).not.toHaveBeenCalled();
 });
+
+it('clips source anchors to the first matching fragment and ignores staging pages', async () => {
+	const { host, root, viewport, page, changed } = setup();
+	page.dataset.sourceMin = '40';
+	page.dataset.sourceMax = '60';
+	const earlier = page.cloneNode() as HTMLElement;
+	earlier.dataset.sourceMin = '10';
+	earlier.dataset.sourceMax = '20';
+	const staging = document.createElement('div');
+	staging.dataset.regionStaging = '';
+	staging.append(earlier.cloneNode());
+	viewport.append(staging, earlier, page);
+	const stop = observePdfDocumentAnchor(
+		{ host, root, viewport, surface: viewport, layoutRevision: () => 1 },
+		{ page: 2, x_min: 10, x_max: 40, y_min: 35, y_max: 50 },
+		changed
+	);
+	await vi.waitFor(() => expect(page.querySelector('[data-pdf-anchor-probe]')).not.toBeNull());
+	expect(earlier.querySelector('[data-pdf-anchor-probe]')).toBeNull();
+	const probe = page.querySelector<HTMLElement>('[data-pdf-anchor-probe]')!;
+	expect(probe.style.top).toBe('0%');
+	expect(probe.style.height).toBe('50%');
+	stop();
+});

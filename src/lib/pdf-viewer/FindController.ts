@@ -19,6 +19,7 @@
  */
 import type { EventBus } from './EventBus.js';
 import type { PDFViewerCore } from './PDFViewerCore.js';
+import type { PDFPageView } from '$lib/pdf-viewer/PDFPageView.js';
 import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 export const FindState = {
@@ -46,6 +47,8 @@ export class FindController {
 	private eventBus: EventBus;
 	private pdfDocument: PDFDocumentProxy | null = null;
 
+	private navigationVersion = 0;
+	private searchVersion = 0;
 	private query: string = '';
 	private caseSensitive: boolean = false;
 	private entireWord: boolean = false;
@@ -67,6 +70,11 @@ export class FindController {
 	constructor(viewer: PDFViewerCore, eventBus: EventBus) {
 		this.viewer = viewer;
 		this.eventBus = eventBus;
+		eventBus.on('textlayerrendered', (data) => this.highlightPage(Number(data.pageNumber) - 1));
+		eventBus.on('regionlayoutchanged', () => this.highlightAllPages());
+		eventBus.on('regionselectionchanged', () => {
+			this.navigationVersion++;
+		});
 	}
 
 	setDocument(pdfDocument: PDFDocumentProxy): void {
@@ -77,7 +85,9 @@ export class FindController {
 	}
 
 	private async extractText(): Promise<void> {
-		if (!this.pdfDocument || this.extractTextPromises.length > 0) {
+		if (!this.pdfDocument) return;
+		if (this.extractTextPromises.length > 0) {
+			await Promise.all(this.extractTextPromises);
 			return;
 		}
 
@@ -115,6 +125,8 @@ export class FindController {
 	}
 
 	async find(options: FindOptions): Promise<void> {
+		const version = ++this.searchVersion;
+		this.navigationVersion++;
 		const {
 			query,
 			highlightAll = true,
@@ -127,6 +139,7 @@ export class FindController {
 		this.clearHighlights();
 
 		if (!query || query.trim() === '') {
+			this.reset();
 			this.query = '';
 			this.allMatches = [];
 			this.selectedMatchIndex = -1;
@@ -148,6 +161,7 @@ export class FindController {
 
 		// Extract text from PDF if not already done
 		await this.extractText();
+		if (version !== this.searchVersion) return;
 
 		// Search all pages
 		this.pageMatches = [];
@@ -199,7 +213,7 @@ export class FindController {
 		if (this.allMatches.length > 0) {
 			this.selectedMatchIndex = findPrevious ? this.allMatches.length - 1 : 0;
 			this.highlightAllPages();
-			this.scrollToSelectedMatch();
+			void this.scrollToSelectedMatch();
 
 			this.eventBus.dispatch('updatefindcontrolstate', {
 				state: FindState.FOUND
@@ -267,9 +281,10 @@ export class FindController {
 	}
 
 	private highlightPage(pageIndex: number): void {
-		const pageView = this.viewer.getPageView(pageIndex);
-		if (!pageView) return;
-
+		for (const pageView of this.viewer.getPageViews(pageIndex))
+			this.highlightPageView(pageIndex, pageView);
+	}
+	private highlightPageView(pageIndex: number, pageView: PDFPageView): void {
 		const matches = this.pageMatches[pageIndex];
 		const matchesLength = this.pageMatchesLength[pageIndex];
 
@@ -479,53 +494,83 @@ export class FindController {
 		}
 	}
 
-	private scrollToSelectedMatch(): void {
+	private async scrollToSelectedMatch(): Promise<void> {
 		if (this.selectedMatchIndex === -1) return;
 
 		const match = this.allMatches[this.selectedMatchIndex];
 		if (!match) return;
 
-		// First scroll to the page
-		this.viewer.scrollToPage(match.pageIndex + 1);
-
-		// Then scroll to the highlighted element only if it's not already visible
-		setTimeout(() => {
-			const selectedElement = this.viewer.container.querySelector('.highlight.selected');
-			if (selectedElement) {
-				const container = this.viewer.container;
-				const containerRect = container.getBoundingClientRect();
-				const elementRect = selectedElement.getBoundingClientRect();
-
-				// Check if element is visible within the container
-				const isVisible =
-					elementRect.top >= containerRect.top &&
-					elementRect.bottom <= containerRect.bottom &&
-					elementRect.left >= containerRect.left &&
-					elementRect.right <= containerRect.right;
-
-				if (!isVisible) {
-					selectedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		const version = ++this.navigationVersion;
+		const source = this.pdfDocument;
+		if (!source) return;
+		try {
+			const page = await source.getPage(match.pageIndex + 1),
+				viewport = page.getViewport({ scale: 1 });
+			const text = await page.getTextContent();
+			if (version !== this.navigationVersion || source !== this.pdfDocument) return;
+			const start = this.pageMatches[match.pageIndex][match.matchIndex],
+				end = start + this.pageMatchesLength[match.pageIndex][match.matchIndex];
+			let offset = 0,
+				top = Infinity,
+				bottom = -Infinity;
+			for (const item of text.items) {
+				if (!('str' in item)) continue;
+				const next = offset + item.str.length;
+				if (next > start && offset < end) {
+					const [a, b, c, d, x, y] = item.transform,
+						baseline = Math.hypot(a, b) || 1;
+					const ascent = text.styles[item.fontName]?.ascent ?? 1,
+						descent = text.styles[item.fontName]?.descent ?? -0.2;
+					const points = [
+						viewport.convertToViewportPoint(x + c * ascent, y + d * ascent),
+						viewport.convertToViewportPoint(x + c * descent, y + d * descent),
+						viewport.convertToViewportPoint(
+							x + (a / baseline) * item.width + c * ascent,
+							y + (b / baseline) * item.width + d * ascent
+						),
+						viewport.convertToViewportPoint(
+							x + (a / baseline) * item.width + c * descent,
+							y + (b / baseline) * item.width + d * descent
+						)
+					];
+					top = Math.min(top, ...points.map((p) => p[1]));
+					bottom = Math.max(bottom, ...points.map((p) => p[1]));
 				}
+				offset = next;
 			}
-		}, 100);
+			if (version !== this.navigationVersion || source !== this.pdfDocument) return;
+			await this.viewer.revealSourceRange(
+				match.pageIndex + 1,
+				Number.isFinite(top) ? Math.max(0, (top / viewport.height) * 100) : 0,
+				Number.isFinite(bottom) ? Math.min(100, (bottom / viewport.height) * 100) : 100,
+				50,
+				'instant',
+				() => version === this.navigationVersion && source === this.pdfDocument
+			);
+			if (version !== this.navigationVersion) return;
+			this.highlightAllPages();
+			const selected = this.viewer.container.querySelector<HTMLElement>('.highlight.selected');
+			selected?.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
+		} catch (error) {
+			console.error('Could not navigate to search match:', error);
+		}
 	}
 
 	private clearHighlights(): void {
 		// Clear all highlights from all pages
 		for (let pageIndex = 0; pageIndex < this.viewer.pagesCount; pageIndex++) {
-			const pageView = this.viewer.getPageView(pageIndex);
-			if (!pageView) continue;
+			for (const pageView of this.viewer.getPageViews(pageIndex)) {
+				const textDivs = pageView.textDivs;
+				const textContentItemsStr = pageView.textContentItemsStr;
 
-			const textDivs = pageView.textDivs;
-			const textContentItemsStr = pageView.textContentItemsStr;
+				if (!textDivs || !textContentItemsStr) continue;
 
-			if (!textDivs || !textContentItemsStr) continue;
-
-			for (let i = 0; i < textDivs.length; i++) {
-				const div = textDivs[i];
-				if (div) {
-					div.textContent = textContentItemsStr[i] || '';
-					div.className = '';
+				for (let i = 0; i < textDivs.length; i++) {
+					const div = textDivs[i];
+					if (div) {
+						div.textContent = textContentItemsStr[i] || '';
+						div.className = '';
+					}
 				}
 			}
 		}
@@ -539,6 +584,8 @@ export class FindController {
 	}
 
 	reset(): void {
+		this.searchVersion++;
+		this.navigationVersion++;
 		this.clearHighlights();
 		this.query = '';
 		this.allMatches = [];
