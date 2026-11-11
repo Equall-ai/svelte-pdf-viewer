@@ -214,7 +214,12 @@ export class PDFPageView {
 		}
 		this.updateViewport();
 
-		if (this.clipText && this.renderingState === RenderingStates.FINISHED) {
+		// A pending canvas still uses the old viewport after the page container resizes.
+		// Restart every layer so citation coordinates and rendered content agree.
+		if (
+			this.renderingState === RenderingStates.RUNNING ||
+			(this.clipText && this.renderingState === RenderingStates.FINISHED)
+		) {
 			this.reset();
 			void this.draw();
 			return;
