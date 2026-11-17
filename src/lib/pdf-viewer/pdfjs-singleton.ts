@@ -8,6 +8,7 @@ let initPromise: Promise<typeof import('pdfjs-dist/legacy/build/pdf.mjs') | null
 
 // User-configured worker source URL
 let configuredWorkerSrc: string | URL | undefined;
+let configuredWasmUrl: string | undefined;
 
 /**
  * Configure the PDF.js worker URL. Call this before mounting any PdfViewer component.
@@ -24,9 +25,19 @@ let configuredWorkerSrc: string | URL | undefined;
  * ```
  *
  * @param workerSrc - URL or path to the PDF.js worker file (pdf.worker.mjs)
+ * @param options - Optional URL of the decoder asset directory, with a trailing slash
  */
-export function configurePdfWorker(workerSrc: string | URL): void {
+export function configurePdfWorker(
+	workerSrc: string | URL,
+	{ wasmUrl }: { wasmUrl?: string } = {}
+): void {
 	configuredWorkerSrc = workerSrc;
+	configuredWasmUrl = wasmUrl;
+}
+
+/** Get the configured PDF.js decoder asset directory. */
+export function getPdfWasmUrl(): string | undefined {
+	return configuredWasmUrl;
 }
 
 /**
