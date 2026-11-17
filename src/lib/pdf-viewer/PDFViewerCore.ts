@@ -44,7 +44,7 @@ import {
 	type PdfGapContext,
 	type RegionGap
 } from '$lib/pdf-viewer/regions.js';
-import { getPdfJs, getPdfWorker } from '$lib/pdf-viewer/pdfjs-singleton.js';
+import { getPdfJs, getPdfWasmUrl, getPdfWorker } from '$lib/pdf-viewer/pdfjs-singleton.js';
 import { animateRegionChange, type RegionSnapshot } from '$lib/pdf-viewer/regionTransition.js';
 import type { RegionPdfSource } from '$lib/pdf-viewer/regionPdf.js';
 type RegionPart = { fragment: PdfFragment; view: PDFPageView; document: PDFDocumentProxy };
@@ -786,6 +786,7 @@ export class PDFViewerCore {
 				if (!js) throw new Error('PDF regions require a browser.');
 				const doc = await js.getDocument({
 					data: generated.bytes,
+					wasmUrl: getPdfWasmUrl(),
 					worker: getPdfWorker() ?? undefined
 				}).promise;
 				if (version !== this.regionVersion || !isCurrent()) {

@@ -60,6 +60,16 @@ configurePdfWorker(new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta
 
 Call this once at app startup (e.g., in your root `+layout.svelte` or `+page.svelte`) before any PDF viewer mounts.
 
+### JPEG 2000 decoder assets
+
+Copy the `wasm/` directory from the same `pdfjs-dist` package that provides the worker into your app's static files. Pass the public directory URL, including the trailing slash, when configuring the worker:
+
+```ts
+import { configurePdfWorker } from '@equall-ai/svelte-pdf-viewer';
+
+configurePdfWorker('/pdf.worker.mjs', { wasmUrl: '/pdfjs/wasm/' });
+```
+
 ## Quick Start
 
 ### Basic Usage

@@ -10,7 +10,7 @@
 		type PdfViewerActions,
 		type PdfSource
 	} from './pdf-viewer/context.js';
-	import { getPdfJs, getPdfWorker } from './pdf-viewer/pdfjs-singleton.js';
+	import { getPdfJs, getPdfWasmUrl, getPdfWorker } from './pdf-viewer/pdfjs-singleton.js';
 	import { PdfPresentationMode } from './pdf-viewer/PdfPresentationMode.js';
 	import { rendererStyles } from './pdf-viewer/renderer-styles.js';
 	import BoundingBoxOverlay from './pdf-viewer/BoundingBoxOverlay.svelte';
@@ -254,6 +254,7 @@
 			const docParams: Record<string, unknown> =
 				typeof documentSource === 'string' ? { url: documentSource } : { ...documentSource };
 			if (worker) docParams.worker = worker;
+			docParams.wasmUrl = getPdfWasmUrl();
 			const nextLoadingTask = pdfjs.getDocument(docParams);
 			loadingTask = nextLoadingTask;
 			const loadedPdfDocument = await nextLoadingTask.promise;
