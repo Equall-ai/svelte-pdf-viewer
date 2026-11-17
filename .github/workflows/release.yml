@@ -1,0 +1,150 @@
+# Validate, version, tag, and publish a manually requested package release.
+name: Release package
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-package
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout requested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@equall-ai'
+
+      - name: Prepare version or resume this release
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BUMP" in patch|minor|major) ;; *) echo 'Invalid version increment'; exit 1 ;; esac
+          npm version "$BUMP" --no-git-tag-version --ignore-scripts
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+          tag="v$version"
+          resume=false
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            # Only this workflow run may resume a tag it already created.
+            test "$(git log -1 --format='%(trailers:key=Release-Run,valueonly)' "$tag")" = "$GITHUB_RUN_ID"
+            test "$(git rev-parse "$tag^1")" = "$GITHUB_SHA"
+            git restore package.json package-lock.json
+            git checkout --detach "$tag"
+            resume=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "resume=$resume" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format version files
+        if: steps.version.outputs.resume != 'true'
+        run: pnpm exec prettier --write --ignore-path /dev/null package.json package-lock.json
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm check
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build and validate package
+        run: pnpm prepack
+
+      - name: Commit and tag version
+        if: steps.version.outputs.resume != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if test "$(git rev-parse origin/main)" != "$GITHUB_SHA"; then
+            echo 'main changed while this release was building. Start a new release from main.'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          git commit -m "chore: release $VERSION" -m "Release-Run: $GITHUB_RUN_ID"
+          git tag -a "$TAG" -m "Release $VERSION"
+          # Publish only after both the version commit and tag are recorded together.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
+
+      - name: Pack release artifact
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP" --json > "$RUNNER_TEMP/pack.json"
+          filename=$(node -p 'JSON.parse(require("fs").readFileSync(process.env.RUNNER_TEMP + "/pack.json", "utf8"))[0].filename')
+          echo "tarball=$RUNNER_TEMP/$filename" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="@equall-ai/svelte-pdf-viewer@$VERSION"
+          if npm view "$package" version --registry=https://npm.pkg.github.com --json > "$RUNNER_TEMP/published.json"; then
+            # A retry after publication must not attempt to overwrite the version.
+            node -e 'const v = JSON.parse(require("fs").readFileSync(process.env.RUNNER_TEMP + "/published.json", "utf8")); if (v !== process.env.VERSION) process.exit(1)'
+            echo "$package is already published."
+          else
+            # Authentication/network errors must not be mistaken for a missing version.
+            node -e 'const e = JSON.parse(require("fs").readFileSync(process.env.RUNNER_TEMP + "/published.json", "utf8")); if (e.error?.code !== "E404") process.exit(1)'
+            git fetch origin main
+            main_version=$(git show origin/main:package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+            if test "$main_version" != "$VERSION"; then
+              echo 'A different release version is now on main. Refusing to replace latest with this older release.'
+              exit 1
+            fi
+            npm publish "$TARBALL" --ignore-scripts --registry=https://npm.pkg.github.com
+          fi
+          npm view "$package" version --registry=https://npm.pkg.github.com
+          echo "Published \`$package\` from tag \`v$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
