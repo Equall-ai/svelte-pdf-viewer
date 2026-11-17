@@ -5,6 +5,7 @@ import Harness from './RendererSurface.test.svelte';
 const { getDocument } = vi.hoisted(() => ({ getDocument: vi.fn() }));
 vi.mock('./pdfjs-singleton.js', () => ({
 	getPdfJs: async () => ({ getDocument }),
+	getPdfWasmUrl: () => undefined,
 	getPdfWorker: () => undefined
 }));
 it('keeps margin content in light DOM and preserves its state when hidden', async () => {

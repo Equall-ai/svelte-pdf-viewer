@@ -379,6 +379,7 @@ let stripGate: Promise<void> | null = null;
 const stripDocuments: Array<{ destroyed: boolean }> = [];
 vi.mock('$lib/pdf-viewer/pdfjs-singleton.js', () => ({
 	getPdfWorker: () => null,
+	getPdfWasmUrl: () => undefined,
 	getPdfJs: async () => ({
 		getDocument: () => ({
 			promise: (async () => {
