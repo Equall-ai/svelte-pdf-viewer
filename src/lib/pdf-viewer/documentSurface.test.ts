@@ -48,3 +48,46 @@ it('reports column geometry and viewport movement without changing the layout re
 	await new Promise((resolve) => setTimeout(resolve, 30));
 	expect(changed).not.toHaveBeenCalled();
 });
+
+it('tracks a sticky margin while wide pages scroll horizontally without revising page layout', async () => {
+	const viewport = document.createElement('div');
+	const surface = document.createElement('div');
+	const pages = document.createElement('div');
+	const margin = document.createElement('div');
+	viewport.append(surface);
+	surface.append(pages, margin);
+	document.body.append(viewport);
+	vi.spyOn(viewport, 'clientWidth', 'get').mockReturnValue(900);
+	vi.spyOn(viewport, 'clientHeight', 'get').mockReturnValue(500);
+	vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 900, 500));
+	vi.spyOn(surface, 'getBoundingClientRect').mockImplementation(
+		() => new DOMRect(10 - viewport.scrollLeft, 20 - viewport.scrollTop, 1500, 2000)
+	);
+	vi.spyOn(pages, 'getBoundingClientRect').mockImplementation(
+		() => new DOMRect(10 - viewport.scrollLeft, 20 - viewport.scrollTop, 1200, 2000)
+	);
+	// The margin stays at the viewport's right edge but shares the pages' vertical scroll.
+	vi.spyOn(margin, 'getBoundingClientRect').mockImplementation(
+		() => new DOMRect(610, 20 - viewport.scrollTop, 300, 2000)
+	);
+	const changed = vi.fn();
+	const stop = observeDocumentSurface({ viewport, surface, pages, margin }, changed);
+	try {
+		await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+		const initial = changed.mock.lastCall![0];
+		expect(initial.margin.x).toBe(600);
+		for (const x of [250, 600, 0]) {
+			viewport.scrollLeft = x;
+			viewport.scrollTop = 150;
+			viewport.dispatchEvent(new Event('scroll'));
+			await vi.waitFor(() => expect(changed.mock.lastCall![0].viewport.x).toBe(x));
+			const geometry = changed.mock.lastCall![0];
+			expect(geometry.margin).toEqual({ x: 600 + x, y: 0, width: 300, height: 2000 });
+			expect(geometry.viewport.y).toBe(150);
+			expect(geometry.pages).toEqual(initial.pages);
+			expect(geometry.layoutRevision).toBe(initial.layoutRevision);
+		}
+	} finally {
+		stop();
+	}
+});

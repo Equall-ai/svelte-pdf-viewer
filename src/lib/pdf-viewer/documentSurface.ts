@@ -50,11 +50,12 @@ export function observeDocumentSurface(
 			const box = element.getBoundingClientRect();
 			return { x: box.x - origin.x, y: box.y - origin.y, width: box.width, height: box.height };
 		};
+		// The sticky margin moves within the surface during horizontal scrolling.
+		marginBounds = relative(margin);
 		let layoutChanged = false;
 		if (layoutDirty) {
 			layoutDirty = false;
 			pageBounds = relative(pages);
-			marginBounds = relative(margin);
 			// Page geometry can change without changing the total height (e.g. mixed-page rotation).
 			const pageGeometry = [...pages.querySelectorAll<HTMLElement>('[data-page-number]')].map(
 				relative
