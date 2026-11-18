@@ -57,8 +57,10 @@ export const rendererStyles = `
  min-height: 100%;
  overflow-anchor: none;
 }
-.pdf-page-column { min-width: 0; }
-.pdf-margin-column { position: relative; min-width: 0; align-self: stretch; }
+/* Keep page annotations below the margin when it overlaps wide pages. */
+.pdf-page-column { position: relative; z-index: 0; min-width: 0; }
+/* Keep the margin reachable when landscape pages or zoom widen the surface. */
+.pdf-margin-column { position: sticky; right: 0; z-index: 1; min-width: 0; align-self: stretch; }
 .pdf-surface-overlay { position: absolute; inset: 0; pointer-events: none; }
 slot[name="margin"], slot[name="surface-overlay"] { display: contents; }
 
