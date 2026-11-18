@@ -64,7 +64,8 @@ export function observeDocumentSurface(
 				origin.width,
 				origin.height,
 				pageBounds,
-				marginBounds,
+				// Horizontal sticky movement is scrolling, not a page layout change.
+				{ y: marginBounds.y, width: marginBounds.width, height: marginBounds.height },
 				pageGeometry,
 				viewport.clientWidth,
 				viewport.clientHeight

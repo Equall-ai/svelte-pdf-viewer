@@ -63,9 +63,11 @@ it('tracks a sticky margin while wide pages scroll horizontally without revising
 	vi.spyOn(surface, 'getBoundingClientRect').mockImplementation(
 		() => new DOMRect(10 - viewport.scrollLeft, 20 - viewport.scrollTop, 1500, 2000)
 	);
-	vi.spyOn(pages, 'getBoundingClientRect').mockImplementation(
-		() => new DOMRect(10 - viewport.scrollLeft, 20 - viewport.scrollTop, 1200, 2000)
-	);
+	const measurePages = vi
+		.spyOn(pages, 'getBoundingClientRect')
+		.mockImplementation(
+			() => new DOMRect(10 - viewport.scrollLeft, 20 - viewport.scrollTop, 1200, 2000)
+		);
 	// The margin stays at the viewport's right edge but shares the pages' vertical scroll.
 	vi.spyOn(margin, 'getBoundingClientRect').mockImplementation(
 		() => new DOMRect(610, 20 - viewport.scrollTop, 300, 2000)
@@ -86,6 +88,11 @@ it('tracks a sticky margin while wide pages scroll horizontally without revising
 			expect(geometry.viewport.y).toBe(150);
 			expect(geometry.pages).toEqual(initial.pages);
 			expect(geometry.layoutRevision).toBe(initial.layoutRevision);
+			// Lazy rendering adds DOM without changing page geometry after scrolling.
+			measurePages.mockClear();
+			pages.append(document.createElement('canvas'));
+			await vi.waitFor(() => expect(measurePages).toHaveBeenCalled());
+			expect(changed.mock.lastCall![0].layoutRevision).toBe(initial.layoutRevision);
 		}
 	} finally {
 		stop();
